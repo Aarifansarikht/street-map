@@ -197,7 +197,7 @@ export default function MapComponent() {
             <option>OSM</option>
             <option>Carto Light</option>
             <option>Carto Dark</option>
-            <option>Stamen Toner</option>
+            {/* <option>Stamen Toner</option> */}
           </select>
         </div>
 

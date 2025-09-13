@@ -19,20 +19,12 @@ function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: numbe
   return null;
 }
 
-// Haversine formula to calculate distance
-const getDistanceKm = (coord1: [number, number], coord2: [number, number]) => {
-  const toRad = (x: number) => (x * Math.PI) / 180;
-  const [lat1, lon1] = coord1;
-  const [lat2, lon2] = coord2;
-  const R = 6371; // km
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
+// Type for Nominatim suggestion
+interface Suggestion {
+  lat: string;
+  lon: string;
+  display_name: string;
+}
 
 export default function MapComponent() {
   const [coords, setCoords] = useState<[number, number]>([28.6139, 77.209]); // default view
@@ -42,41 +34,37 @@ export default function MapComponent() {
     '&copy; <a href="https://www.openstreetmap.org/">OSM</a> contributors'
   );
 
-  // Route mode toggle
   const [routeEnabled, setRouteEnabled] = useState(false);
 
   // Single search
   const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Start & destination
+  // Start & Destination
   const [startQuery, setStartQuery] = useState("");
   const [destQuery, setDestQuery] = useState("");
-  const [startSuggestions, setStartSuggestions] = useState<any[]>([]);
-  const [destSuggestions, setDestSuggestions] = useState<any[]>([]);
+  const [startSuggestions, setStartSuggestions] = useState<Suggestion[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<Suggestion[]>([]);
   const [startCoords, setStartCoords] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
-  const [loadingStart, setLoadingStart] = useState(false);
-  const [loadingDest, setLoadingDest] = useState(false);
-
-  // Distance state
-  const [distance, setDistance] = useState<number | null>(null);
 
   // Fetch suggestions
-  const fetchSuggestions = async (query: string, setFn: any, setLoadingFn: any) => {
-    if (query.length < 3) {
+  const fetchSuggestions = async (
+    q: string,
+    setFn: React.Dispatch<React.SetStateAction<Suggestion[]>>,
+    setLoadingFn: React.Dispatch<React.SetStateAction<boolean>>
+  ) => {
+    if (q.length < 3) {
       setFn([]);
       return;
     }
     setLoadingFn(true);
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-          query
-        )}&format=json&limit=5&addressdetails=1`
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`
       );
-      const data = await res.json();
+      const data: Suggestion[] = await res.json();
       setFn(data);
     } catch (err) {
       console.error("Suggestion fetch error:", err);
@@ -85,7 +73,7 @@ export default function MapComponent() {
     }
   };
 
-  // Suggestion effects
+  // Effects
   useEffect(() => {
     if (!routeEnabled) {
       const debounce = setTimeout(() => fetchSuggestions(query, setSuggestions, setLoading), 400);
@@ -95,30 +83,20 @@ export default function MapComponent() {
 
   useEffect(() => {
     if (routeEnabled) {
-      const debounce = setTimeout(() => fetchSuggestions(startQuery, setStartSuggestions, setLoadingStart), 400);
+      const debounce = setTimeout(() => fetchSuggestions(startQuery, setStartSuggestions, setLoading), 400);
       return () => clearTimeout(debounce);
     }
   }, [startQuery, routeEnabled]);
 
   useEffect(() => {
     if (routeEnabled) {
-      const debounce = setTimeout(() => fetchSuggestions(destQuery, setDestSuggestions, setLoadingDest), 400);
+      const debounce = setTimeout(() => fetchSuggestions(destQuery, setDestSuggestions, setLoading), 400);
       return () => clearTimeout(debounce);
     }
   }, [destQuery, routeEnabled]);
 
-  // Update distance when start/destination change
-  useEffect(() => {
-    if (startCoords && destCoords) {
-      const km = getDistanceKm(startCoords, destCoords);
-      setDistance(parseFloat(km.toFixed(2)));
-    } else {
-      setDistance(null);
-    }
-  }, [startCoords, destCoords]);
-
   // Handlers
-  const handleSelectQuery = (s: any) => {
+  const handleSelectQuery = (s: Suggestion) => {
     const lat = parseFloat(s.lat);
     const lon = parseFloat(s.lon);
     setCoords([lat, lon]);
@@ -126,7 +104,7 @@ export default function MapComponent() {
     setSuggestions([]);
   };
 
-  const handleSelectStart = (s: any) => {
+  const handleSelectStart = (s: Suggestion) => {
     const lat = parseFloat(s.lat);
     const lon = parseFloat(s.lon);
     setStartCoords([lat, lon]);
@@ -135,7 +113,7 @@ export default function MapComponent() {
     setCoords([lat, lon]);
   };
 
-  const handleSelectDest = (s: any) => {
+  const handleSelectDest = (s: Suggestion) => {
     const lat = parseFloat(s.lat);
     const lon = parseFloat(s.lon);
     setDestCoords([lat, lon]);
@@ -156,7 +134,6 @@ export default function MapComponent() {
     setDestCoords(null);
   };
 
-  // Tile switch
   const changeTile = (option: string) => {
     switch (option) {
       case "OSM":
@@ -178,13 +155,27 @@ export default function MapComponent() {
     }
   };
 
+  // Distance calculation
+  const getDistanceKm = (start: [number, number], end: [number, number]): number => {
+    const toRad = (x: number) => (x * Math.PI) / 180;
+    const R = 6371; // km
+    const dLat = toRad(end[0] - start[0]);
+    const dLon = toRad(end[1] - start[1]);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(start[0])) * Math.cos(toRad(end[0])) * Math.sin(dLon / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const distance =
+    startCoords && destCoords ? getDistanceKm(startCoords, destCoords).toFixed(2) : null;
+
   return (
     <div className="flex flex-col md:flex-row w-full max-w-7xl mx-auto p-4 bg-gray-50 rounded-2xl shadow-lg gap-4">
       {/* Sidebar */}
       <div className="w-full md:w-64 bg-white p-4 rounded-xl shadow-md flex-shrink-0">
         <h2 className="text-lg font-bold mb-4 text-gray-800">Map Controls</h2>
-
-        {/* Toggle Route Mode */}
         <div className="mb-4 flex items-center gap-2">
           <input
             type="checkbox"
@@ -197,7 +188,6 @@ export default function MapComponent() {
           </label>
         </div>
 
-        {/* Tile Selector */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-gray-700">Tile Style</label>
           <select
@@ -207,11 +197,10 @@ export default function MapComponent() {
             <option>OSM</option>
             <option>Carto Light</option>
             <option>Carto Dark</option>
-            {/* <option>Stamen Toner</option> */}
+            <option>Stamen Toner</option>
           </select>
         </div>
 
-        {/* Zoom */}
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-gray-700">Zoom</label>
           <input
@@ -225,10 +214,9 @@ export default function MapComponent() {
           <div className="text-sm mt-1 text-gray-700">{zoom}</div>
         </div>
 
-        {/* Distance Display */}
-        {routeEnabled && distance !== null && (
-          <div className="mt-4 text-gray-700 text-sm font-medium">
-            Travel Distance: <span className="font-bold">{distance} km</span>
+        {distance && (
+          <div className="mt-4 text-gray-700 font-medium">
+            Distance: <span className="text-green-600">{distance} km</span>
           </div>
         )}
       </div>
@@ -274,9 +262,9 @@ export default function MapComponent() {
 
         {/* Route Inputs */}
         {routeEnabled && (
-          <div className="flex gap-10 mb-4">
-            {/* Start Input */}
-            <div className="relative z-50 w-full">
+          <div className="flex gap-10">
+            {/* Start */}
+            <div className="relative mb-2 z-50 w-full">
               <input
                 type="text"
                 placeholder="Start location"
@@ -307,8 +295,8 @@ export default function MapComponent() {
               )}
             </div>
 
-            {/* Destination Input */}
-            <div className="relative z-50 w-full">
+            {/* Destination */}
+            <div className="relative mb-4 z-50 w-full">
               <input
                 type="text"
                 placeholder="Destination location"

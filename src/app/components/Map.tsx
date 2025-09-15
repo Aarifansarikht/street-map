@@ -1,9 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import { unBound } from "../layout";
+import Image from "next/image";
+import { HiArrowsUpDown } from "react-icons/hi2";
+import { FaMapMarkerAlt } from "react-icons/fa";
+import { useMapEvents } from "react-leaflet";
 
 // Fix for default markers in react-leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -45,6 +50,49 @@ function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: numbe
   return null;
 }
 
+
+function ScaleControl() {
+  const map = useMap();
+
+  useEffect(() => {
+    // Add the built-in scale bar (bottom-left)
+    const scale = L.control.scale({ imperial: true, metric: true }).addTo(map);
+
+    // Function to log scale info
+    const logScale = () => {
+      const zoom = map.getZoom();
+      const center = map.getCenter();
+      const bounds = map.getBounds();
+
+      // Get distance across map (horizontal) in meters
+      const west = bounds.getWest();
+      const east = bounds.getEast();
+      const middleLat = center.lat;
+
+      const distanceMeters = map.distance([middleLat, west], [middleLat, east]);
+      const distanceKm = (distanceMeters / 1000).toFixed(2);
+      const distanceMiles = (distanceMeters / 1609.34).toFixed(2);
+
+      console.log(
+        `Zoom: ${zoom} | Approx. width: ${distanceKm} km (${distanceMiles} miles)`
+      );
+    };
+
+    // Run once & on zoom
+    logScale();
+    map.on("zoomend", logScale);
+    map.on("moveend", logScale);
+
+    return () => {
+      scale.remove();
+      map.off("zoomend", logScale);
+      map.off("moveend", logScale);
+    };
+  }, [map]);
+
+  return null;
+}
+
 // Type for Nominatim suggestion
 interface Suggestion {
   lat: string;
@@ -58,6 +106,11 @@ interface Route {
   distance: number;
   duration: number;
 }
+interface MonitoredTileLayerProps {
+  url: string;
+  attribution: string;
+  maxRequestsPerSecond?: number;
+}
 
 export default function MapComponent() {
   const [coords, setCoords] = useState<[number, number]>([28.6139, 77.209]); // default view (Delhi)
@@ -69,13 +122,14 @@ export default function MapComponent() {
 
   const [routeEnabled, setRouteEnabled] = useState(false);
   const [transportMode, setTransportMode] = useState<"driving" | "walking" | "cycling">("driving");
-  
+
   // Single search
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Start & Destination
+  const [requestCount, setRequestCount] = useState(0);
   const [startQuery, setStartQuery] = useState("");
   const [destQuery, setDestQuery] = useState("");
   const [startSuggestions, setStartSuggestions] = useState<Suggestion[]>([]);
@@ -84,7 +138,7 @@ export default function MapComponent() {
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
   const [route, setRoute] = useState<Route | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
-
+  const [showHelp, setShowHelp] = useState(false)
   // User location
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -120,7 +174,7 @@ export default function MapComponent() {
   // Calculate route
   const calculateRoute = async () => {
     if (!startCoords || !destCoords) return;
-    
+
     setRouteLoading(true);
     try {
       // Using OSRM API for routing
@@ -128,7 +182,7 @@ export default function MapComponent() {
         `https://router.project-osrm.org/route/v1/${transportMode}/${startCoords[1]},${startCoords[0]};${destCoords[1]},${destCoords[0]}?overview=full&geometries=geojson`
       );
       const data = await res.json();
-      
+
       if (data.code === "Ok") {
         const routeCoordinates = data.routes[0].geometry.coordinates.map((coord: [number, number]) => [coord[1], coord[0]]);
         setRoute({
@@ -150,14 +204,14 @@ export default function MapComponent() {
       setLocationError("Geolocation is not supported by your browser");
       return;
     }
-    
+
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
         setUserLocation([latitude, longitude]);
         setCoords([latitude, longitude]);
         setLocationError(null);
-        
+
         // If route is enabled, set as start point
         if (routeEnabled) {
           setStartCoords([latitude, longitude]);
@@ -174,13 +228,13 @@ export default function MapComponent() {
   // Save current place
   const savePlace = () => {
     if (!query) return;
-    
+
     const newPlace: Suggestion = {
       display_name: query,
       lat: coords[0].toString(),
       lon: coords[1].toString()
     };
-    
+
     setSavedPlaces([...savedPlaces, newPlace]);
     localStorage.setItem('savedPlaces', JSON.stringify([...savedPlaces, newPlace]));
   };
@@ -204,6 +258,7 @@ export default function MapComponent() {
     setDestCoords(null);
     setRoute(null);
   };
+
 
   // Effects
   useEffect(() => {
@@ -248,6 +303,8 @@ export default function MapComponent() {
     setCoords([lat, lon]);
     setQuery(s.display_name);
     setSuggestions([]);
+    savePlace();
+
   };
 
   const handleSelectStart = (s: Suggestion) => {
@@ -256,6 +313,8 @@ export default function MapComponent() {
     setStartCoords([lat, lon]);
     setStartQuery(s.display_name);
     setStartSuggestions([]);
+    savePlace();
+
   };
 
   const handleSelectDest = (s: Suggestion) => {
@@ -264,6 +323,8 @@ export default function MapComponent() {
     setDestCoords([lat, lon]);
     setDestQuery(s.display_name);
     setDestSuggestions([]);
+    savePlace();
+
   };
 
   const changeTile = (option: string) => {
@@ -288,14 +349,14 @@ export default function MapComponent() {
   };
 
   return (
-    <div className="flex flex-col md:flex-row w-full max-w-7xl mx-auto p-4 bg-gray-50 rounded-2xl shadow-lg gap-4">
+    <div className="flex flex-col md:flex-row h-screen w-full max-w-full mx-auto bg-gray-50 shadow-lg">
       {/* Sidebar */}
-      <div className="w-full md:w-80 bg-white p-4 rounded-xl shadow-md flex-shrink-0 overflow-y-auto max-h-screen">
-        <h2 className="text-lg font-bold mb-4 text-gray-800">Map Controls</h2>
-        
+      <div className="w-full md:w-80 bg-white p-4 shadow-md flex-shrink-0 overflow-y-auto max-h-screen">
+        <h2 className={`text-2xl font-bold mb-4 text-gray-800 ${unBound.className} `}>Map Sentinel</h2>
+
         {/* Location button */}
         <div className="mb-4">
-          <button 
+          <button
             onClick={getUserLocation}
             className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
           >
@@ -303,7 +364,7 @@ export default function MapComponent() {
           </button>
           {locationError && <p className="text-red-500 text-sm mt-1">{locationError}</p>}
         </div>
-        
+
         <div className="mb-4 flex items-center gap-2">
           <input
             type="checkbox"
@@ -320,7 +381,7 @@ export default function MapComponent() {
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm font-medium mb-1 text-gray-700">Map Style</label>
+          <label className="block text-lg font-bold mb-1 text-gray-700">Map Style</label>
           <select
             className="w-full border border-gray-300 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-300"
             onChange={(e) => changeTile(e.target.value)}
@@ -332,7 +393,7 @@ export default function MapComponent() {
           </select>
         </div>
 
-        <div className="mb-4">
+        {/* <div className="mb-4">
           <label className="block text-sm font-medium mb-1 text-gray-700">Zoom</label>
           <input
             type="range"
@@ -343,12 +404,12 @@ export default function MapComponent() {
             className="w-full"
           />
           <div className="text-sm mt-1 text-gray-700">{zoom}</div>
-        </div>
+        </div> */}
 
         {/* Route options */}
         {routeEnabled && (
           <>
-          
+
 
             {route && (
               <div className="mt-4 p-3 bg-blue-50 rounded-lg">
@@ -365,21 +426,21 @@ export default function MapComponent() {
         {/* Saved places */}
         <div className="mb-4">
           <div className="flex items-center justify-between">
-            <label className="block text-sm font-medium text-gray-700">Saved Places</label>
-            <button 
+            <label className="block text-lg font-bold text-gray-700">Saved Places</label>
+            <button
               onClick={() => setShowSavedPlaces(!showSavedPlaces)}
               className="text-blue-500 text-sm"
             >
               {showSavedPlaces ? "Hide" : "Show"}
             </button>
           </div>
-          
+
           {showSavedPlaces && (
             <div className="mt-2 max-h-40 overflow-y-auto">
               {savedPlaces.length > 0 ? (
                 savedPlaces.map((place, index) => (
-                  <div 
-                    key={index} 
+                  <div
+                    key={index}
                     className="p-2 text-sm border-b border-gray-200 text-black hover:bg-gray-100 cursor-pointer"
                     onClick={() => {
                       const lat = parseFloat(place.lat);
@@ -399,171 +460,206 @@ export default function MapComponent() {
         </div>
       </div>
 
-      {/* Map Section */}
-      <div className="flex-1 relative z-0">
-        {/* Search Inputs */}
-        {!routeEnabled && (
-          <div className="relative mb-4 z-50">
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <input
-                  type="text"
-                  placeholder="Search for a place"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-green-300 text-gray-700"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-                {query && (
-                  <button
-                    onClick={handleClearQuery}
-                    className="absolute right-12 top-3 text-gray-500 hover:text-gray-700 z-50"
-                    title="Clear search"
-                  >
-                    &#10005;
-                  </button>
-                )}
-                {loading && (
-                  <div className="absolute right-12 top-3 animate-spin w-5 h-5 border-2 border-green-400 border-t-transparent rounded-full z-50"></div>
-                )}
-              </div>
-              <button
-                onClick={savePlace}
-                disabled={!query}
-                className="px-4 bg-yellow-500 text-white rounded-xl hover:bg-yellow-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-                title="Save this place"
-              >
-                Save
-              </button>
-            </div>
-            
-            {suggestions.length > 0 && (
-              <ul className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1">
-                {suggestions.map((s, i) => (
-                  <li
-                    key={i}
-                    className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
-                    onClick={() => handleSelectQuery(s)}
-                  >
-                    {s.display_name}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+      {/* <div className="max-w-[calc(100% - 80px)] w-full h-screen"> */}
+      {!routeEnabled && (
+        <div className="relative md:absolute left-0 px-2 md:px-4 w-full md:max-w-[calc(100%-20rem)] ml-auto right-0 my-2 md:mt-4 z-50">
+          <div className="flex relative items-center gap-2 justify-between">
+            {/* Search box - smaller */}
+            <div className="relative flex-1 mx-auto max-w-sm">
+              <input
+                type="text"
+                placeholder="Search place"
+                className="w-full bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
 
-        {/* Route Inputs */}
-        {routeEnabled && (
-          <div className="flex flex-col md:flex-row gap-4 mb-4">
-            {/* Start */}
-            <div className="relative z-50 w-full">
-              <label className="block text-sm font-medium mb-1 text-gray-700">Start</label>
+              {/* Clear Button */}
+              {query && (
+                <button
+                  onClick={handleClearQuery}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition"
+                  title="Clear search"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Loading Spinner */}
+              {loading && (
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 animate-spin w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full"></div>
+              )}
+              {suggestions.length > 0 && (
+                <ul className="absolute  top-full left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">
+                  {suggestions.map((s, i) => (
+                    <li
+                      key={i}
+                      className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
+                      onClick={() => handleSelectQuery(s)}
+                    >
+                      {s.display_name}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+
+            {/* Help Button */}
+            <button
+              onClick={() => setShowHelp(true)}
+              className="p-2 h-10 w-10 flex justify-center items-center font-semibold bg-yellow-500 text-white rounded-full hover:bg-yellow-600 transition text-2xl"
+            >
+              ?
+            </button>
+          </div>
+
+          {/* Suggestions dropdown */}
+
+        </div>
+      )}
+      {routeEnabled && (
+        <div className="relative md:absolute left-0 md:left-28 md:right-0 my-2 md:mt-4 px-2 md:px-4 z-50 flex justify-between">
+          <div className="bg-white flex gap-4 rounded-xl mx-auto justify-center items-center p-4 shadow-md w-full max-w-lg border border-gray-200">
+
+            {/* Icons column */}
+            <div className="flex flex-col items-center h-full">
+              <span className="text-gray-600 text-lg">○</span>
+              <div className="flex-1 border-l-2 border-dotted border-gray-500 mb-2"></div>
+              <FaMapMarkerAlt className="text-red-600 text-lg" />
+            </div>
+
+            {/* Inputs */}
+            <div className="flex flex-col gap-3 w-full">
+              {/* Start input */}
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Start location"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-green-300 text-gray-700"
+                  placeholder="Your location"
+                  className="w-full bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400"
                   value={startQuery}
                   onChange={(e) => setStartQuery(e.target.value)}
                 />
                 {startQuery && (
                   <button
                     onClick={handleClearStart}
-                    className="absolute right-3 top-2.5 text-gray-500 hover:text-gray-700 z-50"
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
                     title="Clear start location"
                   >
-                    &#10005;
+                    ✕
                   </button>
                 )}
+                {startSuggestions.length > 0 && (
+                  <ul className="absolute mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-40 overflow-auto z-[1070]">
+                    {startSuggestions.map((s, i) => (
+                      <li
+                        key={i}
+                        className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
+                        onClick={() => handleSelectStart(s)}
+                      >
+                        {s.display_name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              {startSuggestions.length > 0 && (
-                <ul className="absolute mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-40 overflow-auto z-[1050]">
-                  {startSuggestions.map((s, i) => (
-                    <li
-                      key={i}
-                      className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
-                      onClick={() => handleSelectStart(s)}
-                    >
-                      {s.display_name}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
 
-            {/* Destination */}
-            <div className="relative z-50 w-full">
-              <label className="block text-sm font-medium mb-1 text-gray-700">Destination</label>
+              {/* Destination input */}
               <div className="relative">
                 <input
                   type="text"
                   placeholder="Destination location"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-green-300 text-gray-700"
+                  className="w-full bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400"
                   value={destQuery}
                   onChange={(e) => setDestQuery(e.target.value)}
                 />
                 {destQuery && (
                   <button
                     onClick={handleClearDest}
-                    className="absolute right-3 top-2.5 text-gray-500 hover:text-gray-700 z-50"
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600"
                     title="Clear destination"
                   >
-                    &#10005;
+                    ✕
                   </button>
                 )}
+                {destSuggestions.length > 0 && (
+                  <ul className="absolute mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-40 overflow-auto z-[1050]">
+                    {destSuggestions.map((s, i) => (
+                      <li
+                        key={i}
+                        className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
+                        onClick={() => handleSelectDest(s)}
+                      >
+                        {s.display_name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
-              {destSuggestions.length > 0 && (
-                <ul className="absolute mt-1 left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-40 overflow-auto z-[1050]">
-                  {destSuggestions.map((s, i) => (
-                    <li
-                      key={i}
-                      className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-700"
-                      onClick={() => handleSelectDest(s)}
-                    >
-                      {s.display_name}
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
+
+            {/* Swap button */}
+            <button className="flex items-center justify-center w-10 h-10 rounded-lg">
+              <HiArrowsUpDown className="text-2xl font-bold text-gray-700" />
+            </button>
           </div>
-        )}
+          <button
+            onClick={() => setShowHelp(true)}
+            className="p-2 h-10 w-10 max-sm:hidden flex justify-center items-center font-semibold bg-yellow-500 text-white rounded-full hover:bg-yellow-600 transition text-2xl"
+          >
+            ?
+          </button>
+        </div>
+      )}
+
+      {/* Map Section */}
+      <div className="flex-1 relative z-0">
+        {/* Route Inputs */}
 
         {/* Map */}
-        <div className="w-full rounded-2xl overflow-hidden shadow-lg border border-gray-200 relative z-0">
-          <MapContainer center={coords} zoom={zoom} style={{ height: "500px", width: "100%" }}>
+        <div className="w-full overflow-hidden shadow-lg border border-gray-200 h-[100%] relative">
+
+          <MapContainer center={coords} zoom={zoom} style={{ height: "100%", width: "100%" }}>
+
             <TileLayer url={tileUrl} attribution={tileAttribution} />
+
             <ChangeMapView coords={coords} zoom={zoom} />
-            
+            {/* <MapLogger />   */}
+            <ScaleControl />
+
+
             {/* Current location marker */}
             {userLocation && (
               <Marker position={userLocation} icon={currentLocationIcon}>
                 <Popup>Your current location</Popup>
               </Marker>
             )}
-            
+
             {/* Single location marker */}
             {!routeEnabled && <Marker position={coords} icon={markerIcon} />}
-            
+
             {/* Route markers */}
             {routeEnabled && startCoords && (
               <Marker position={startCoords} icon={startIcon}>
                 <Popup>Start location</Popup>
               </Marker>
             )}
-            
+
             {routeEnabled && destCoords && (
               <Marker position={destCoords} icon={endIcon}>
                 <Popup>Destination</Popup>
               </Marker>
             )}
-            
+
             {/* Route polyline */}
             {routeEnabled && route && (
               <Polyline positions={route.coordinates} color="blue" weight={4} opacity={0.7} />
             )}
+
           </MapContainer>
-          
+
           {/* Route loading indicator */}
           {routeLoading && (
             <div className="absolute top-4 right-4 bg-white p-3 rounded-lg shadow-md flex items-center gap-2">
@@ -571,6 +667,29 @@ export default function MapComponent() {
               <span className="text-sm">Calculating route...</span>
             </div>
           )}
+          {/* Help Modal */}
+          {showHelp && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2000]">
+              <div className="bg-white p-6 rounded-xl shadow-lg max-w-md w-full">
+                <h2 className="text-lg font-bold mb-3 text-gray-800">How to Use Mapzy 🗺️</h2>
+                <ul className="list-disc list-inside text-gray-700 text-sm space-y-2">
+                  <li>Use the search bar to find locations.</li>
+                  <li>Click 📍 to use your current location.</li>
+                  <li>Enable route planning to select start & destination.</li>
+                  <li>Change map style (OSM, Satellite, Dark, etc.) from sidebar.</li>
+                </ul>
+                <div className="flex justify-end mt-4">
+                  <button
+                    onClick={() => setShowHelp(false)}
+                    className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
     </div>

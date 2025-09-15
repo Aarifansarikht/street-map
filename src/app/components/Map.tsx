@@ -4,18 +4,26 @@ import { useState, useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, ZoomControl, } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import "leaflet";
 import { unBound } from "../layout";
-import Image from "next/image";
 import { HiArrowsUpDown } from "react-icons/hi2";
 import { FaMapMarkerAlt } from "react-icons/fa";
-import { useMapEvents } from "react-leaflet";
 import { VscThreeBars } from "react-icons/vsc";
 import { TiTimes } from "react-icons/ti";
-import { useIsMobile, useIsSmallScreen } from "../hooks/windowResize";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useIsSmallScreen } from "../hooks/windowResize";
+// import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
+// Tell TypeScript that _getIconUrl may exist
+declare module "leaflet" {
+  interface IconDefault {
+    _getIconUrl?: () => string;
+  }
+}
+
+// Now you can safely delete it
+delete (L.Icon.Default.prototype as L.IconDefault)._getIconUrl;
+
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -46,6 +54,12 @@ const currentLocationIcon = new L.Icon({
   iconSize: [30, 45],
   iconAnchor: [15, 45],
 });
+type NominatimItem = {
+  lat: string;
+  lon: string;
+  display_name: string;
+};
+
 
 // Change map view
 function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: number }) {
@@ -54,12 +68,12 @@ function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: numbe
   return null;
 }
 
-const tileUsageData = [
-  { zoom: "5", tiles: 120 },
-  { zoom: "10", tiles: 350 },
-  { zoom: "15", tiles: 780 },
-  { zoom: "20", tiles: 1500 },
-];
+// const tileUsageData = [
+//   { zoom: "5", tiles: 120 },
+//   { zoom: "10", tiles: 350 },
+//   { zoom: "15", tiles: 780 },
+//   { zoom: "20", tiles: 1500 },
+// ];
 
 
 
@@ -184,7 +198,7 @@ export default function MapComponent() {
 
       // Type check
       if (Array.isArray(data)) {
-        const suggestions: Suggestion[] = data.map((item: any) => ({
+        const suggestions: Suggestion[] = data.map((item: NominatimItem) => ({
           lat: item.lat,
           lon: item.lon,
           display_name: item.display_name,
@@ -193,13 +207,14 @@ export default function MapComponent() {
       } else {
         setFn([]);
       }
-    } catch (err) {
-      if ((err as any).name !== "AbortError") {
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== "AbortError") {
         console.error("Suggestion fetch error:", err);
       }
     } finally {
       setLoadingFn(false);
     }
+
   };
 
 
@@ -319,16 +334,16 @@ export default function MapComponent() {
   }
 
 
-  const handleTileLoad = (zoom: number) => {
-    setTileCounts((prev) =>
-      prev.map((item) =>
-        item.zoom === zoom ? { ...item, tiles: item.tiles + 1 } : item
-      )
-    );
-    const count = tileCounts.find((item) => item.zoom === zoom)?.tiles ?? 0;
-    console.log(`Zoom ${zoom}: ${count + 1} tiles loaded`);
+  // const handleTileLoad = (zoom: number) => {
+  //   setTileCounts((prev) =>
+  //     prev.map((item) =>
+  //       item.zoom === zoom ? { ...item, tiles: item.tiles + 1 } : item
+  //     )
+  //   );
+  //   const count = tileCounts.find((item) => item.zoom === zoom)?.tiles ?? 0;
+  //   console.log(`Zoom ${zoom}: ${count + 1} tiles loaded`);
 
-  };
+  // };
   // Effects
 
   useEffect(() => {

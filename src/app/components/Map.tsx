@@ -480,7 +480,8 @@ export default function MapComponent() {
               <input
                 type="text"
                 placeholder="Search place"
-                className=" bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400 md:w-full w-[85%] ml-13"
+                className=" bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none 
+                pr-10 focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400 md:w-full w-[85%] md:ml-0 ml-13"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -500,7 +501,7 @@ export default function MapComponent() {
 
               {/* Loading Spinner */}
               {loading && (
-                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 animate-spin w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full"></div>
+                <div className="absolute right-0 top-1/2 transform -translate-y-1/2 animate-spin w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full"></div>
               )}
               {suggestions.length > 0 && (
                 <ul className="absolute  top-full left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">

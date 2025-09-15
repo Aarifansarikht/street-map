@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, ZoomControl, } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { unBound } from "../layout";
@@ -9,6 +9,9 @@ import Image from "next/image";
 import { HiArrowsUpDown } from "react-icons/hi2";
 import { FaMapMarkerAlt } from "react-icons/fa";
 import { useMapEvents } from "react-leaflet";
+import { VscThreeBars } from "react-icons/vsc";
+import { TiTimes } from "react-icons/ti";
+import { useIsMobile, useIsSmallScreen } from "../hooks/windowResize";
 
 // Fix for default markers in react-leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -72,10 +75,6 @@ function ScaleControl() {
       const distanceMeters = map.distance([middleLat, west], [middleLat, east]);
       const distanceKm = (distanceMeters / 1000).toFixed(2);
       const distanceMiles = (distanceMeters / 1609.34).toFixed(2);
-
-      console.log(
-        `Zoom: ${zoom} | Approx. width: ${distanceKm} km (${distanceMiles} miles)`
-      );
     };
 
     // Run once & on zoom
@@ -146,7 +145,8 @@ export default function MapComponent() {
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<Suggestion[]>([]);
   const [showSavedPlaces, setShowSavedPlaces] = useState(false);
-
+  const isMobile = useIsSmallScreen();
+  const [showSidebar, setShowSidebar] = useState(isMobile);
   // Fetch suggestions
   const fetchSuggestions = async (
     q: string,
@@ -296,6 +296,10 @@ export default function MapComponent() {
     }
   }, []);
 
+  useEffect(() => {
+    setShowSidebar(isMobile);
+  }, [isMobile]);
+
   // Handlers
   const handleSelectQuery = (s: Suggestion) => {
     const lat = parseFloat(s.lat);
@@ -351,9 +355,11 @@ export default function MapComponent() {
   return (
     <div className="flex flex-col md:flex-row h-screen w-full max-w-full mx-auto bg-gray-50 shadow-lg">
       {/* Sidebar */}
-      <div className="w-full md:w-80 bg-white p-4 shadow-md flex-shrink-0 overflow-y-auto max-h-screen">
+      <div className={`w-[80%] md:w-80 bg-white p-4 shadow-md flex-shrink-0 overflow-y-auto max-h-screen md:relative fixed top-0 left-0 h-full z-50 transition-all ${!showSidebar ? "translate-x-0" : "-translate-x-full"}`}>
         <h2 className={`text-2xl font-bold mb-4 text-gray-800 ${unBound.className} `}>Map Sentinel</h2>
-
+        <button className="absolute right-4 top-4 md:hidden block" onClick={() => setShowSidebar(!showSidebar)}>
+          <TiTimes className="text-2xl font-bold text-gray-700" />
+        </button>
         {/* Location button */}
         <div className="mb-4">
           <button
@@ -462,14 +468,19 @@ export default function MapComponent() {
 
       {/* <div className="max-w-[calc(100% - 80px)] w-full h-screen"> */}
       {!routeEnabled && (
-        <div className="relative md:absolute left-0 px-2 md:px-4 w-full md:max-w-[calc(100%-20rem)] ml-auto right-0 my-2 md:mt-4 z-50">
+        <div className="absolute left-0 px-2 md:px-4 w-full md:max-w-[calc(100%-20rem)] ml-auto right-0 my-2 md:mt-4 z-40">
           <div className="flex relative items-center gap-2 justify-between">
             {/* Search box - smaller */}
             <div className="relative flex-1 mx-auto max-w-sm">
+              <button className="absolute left-1   top-1/2 transform -translate-y-1/2 bg-white rounded-full p-2 md:hidden block"
+                onClick={() => setShowSidebar(!showSidebar)}
+              >
+                <VscThreeBars className="text-2xl font-bold text-gray-700" />
+              </button>
               <input
                 type="text"
                 placeholder="Search place"
-                className="w-full bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400"
+                className=" bg-white px-4 py-3 rounded-full shadow-md border border-gray-200 text-gray-700 text-sm focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-green-400 transition-all placeholder-gray-400 md:w-full w-[85%] ml-13"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -621,10 +632,10 @@ export default function MapComponent() {
         {/* Map */}
         <div className="w-full overflow-hidden shadow-lg border border-gray-200 h-[100%] relative">
 
-          <MapContainer center={coords} zoom={zoom} style={{ height: "100%", width: "100%" }}>
+          <MapContainer center={coords} zoom={zoom} style={{ height: "100%", width: "100%" }} zoomControl={false} >
 
             <TileLayer url={tileUrl} attribution={tileAttribution} />
-
+            <ZoomControl position="bottomright" />
             <ChangeMapView coords={coords} zoom={zoom} />
             {/* <MapLogger />   */}
             <ScaleControl />
@@ -671,7 +682,7 @@ export default function MapComponent() {
           {showHelp && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2000]">
               <div className="bg-white p-6 rounded-xl shadow-lg max-w-md w-full">
-                <h2 className="text-lg font-bold mb-3 text-gray-800">How to Use Mapzy 🗺️</h2>
+                <h2 className="text-lg font-bold mb-3 text-gray-800">How to Use Map Sentinel 🗺️</h2>
                 <ul className="list-disc list-inside text-gray-700 text-sm space-y-2">
                   <li>Use the search bar to find locations.</li>
                   <li>Click 📍 to use your current location.</li>

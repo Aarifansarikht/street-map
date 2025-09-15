@@ -108,7 +108,7 @@ export const useResponsiveGrid = (columns: {
   desktop?: number;
   xlarge?: number;
 }) => {
-  const { breakpoint } = useResponsiveValue({
+  const  breakpoint  = useResponsiveValue({
     mobile: columns.mobile ?? 1,
     tablet: columns.tablet ?? 2,
     laptop: columns.laptop ?? 3,

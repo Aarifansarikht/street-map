@@ -12,6 +12,7 @@ import { useMapEvents } from "react-leaflet";
 import { VscThreeBars } from "react-icons/vsc";
 import { TiTimes } from "react-icons/ti";
 import { useIsMobile, useIsSmallScreen } from "../hooks/windowResize";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -52,6 +53,15 @@ function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: numbe
   map.setView(coords, zoom);
   return null;
 }
+
+const tileUsageData = [
+  { zoom: "5", tiles: 120 },
+  { zoom: "10", tiles: 350 },
+  { zoom: "15", tiles: 780 },
+  { zoom: "20", tiles: 1500 },
+];
+
+
 
 
 function ScaleControl() {
@@ -141,6 +151,7 @@ export default function MapComponent() {
   // User location
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [tileCounts, setTileCounts] = useState<{ zoom: number; tiles: number }[]>([]);
 
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<Suggestion[]>([]);
@@ -151,25 +162,46 @@ export default function MapComponent() {
   const fetchSuggestions = async (
     q: string,
     setFn: React.Dispatch<React.SetStateAction<Suggestion[]>>,
-    setLoadingFn: React.Dispatch<React.SetStateAction<boolean>>
+    setLoadingFn: React.Dispatch<React.SetStateAction<boolean>>,
+    signal?: AbortSignal
   ) => {
     if (q.length < 2) {
       setFn([]);
       return;
     }
+
     setLoadingFn(true);
+
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`,
+        { signal }
       );
-      const data: Suggestion[] = await res.json();
-      setFn(data);
+
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
+      const data: unknown = await res.json();
+
+      // Type check
+      if (Array.isArray(data)) {
+        const suggestions: Suggestion[] = data.map((item: any) => ({
+          lat: item.lat,
+          lon: item.lon,
+          display_name: item.display_name,
+        }));
+        setFn(suggestions);
+      } else {
+        setFn([]);
+      }
     } catch (err) {
-      console.error("Suggestion fetch error:", err);
+      if ((err as any).name !== "AbortError") {
+        console.error("Suggestion fetch error:", err);
+      }
     } finally {
       setLoadingFn(false);
     }
   };
+
 
   // Calculate route
   const calculateRoute = async () => {
@@ -259,8 +291,55 @@ export default function MapComponent() {
     setRoute(null);
   };
 
+  function MonitoredTileLayer({
+    url,
+    attribution,
+    onTileLoad,
+  }: {
+    url: string;
+    attribution: string;
+    onTileLoad: (zoom: number) => void;
+  }) {
+    const map = useMap();
 
+    useEffect(() => {
+      const tileLayer = L.tileLayer(url, { attribution }).addTo(map);
+
+      tileLayer.on("tileload", (e) => {
+        const zoom = map.getZoom();
+        onTileLoad(zoom);
+      });
+
+      return () => {
+        tileLayer.remove();
+      };
+    }, [map, url, attribution, onTileLoad]);
+
+    return null;
+  }
+
+
+  const handleTileLoad = (zoom: number) => {
+    setTileCounts((prev) =>
+      prev.map((item) =>
+        item.zoom === zoom ? { ...item, tiles: item.tiles + 1 } : item
+      )
+    );
+    const count = tileCounts.find((item) => item.zoom === zoom)?.tiles ?? 0;
+    console.log(`Zoom ${zoom}: ${count + 1} tiles loaded`);
+
+  };
   // Effects
+
+  useEffect(() => {
+    // Initialize for all zoom levels you want
+    const initialData: { zoom: number; tiles: number }[] = [];
+    for (let z = 1; z <= 20; z++) {
+      initialData.push({ zoom: z, tiles: 0 });
+    }
+    setTileCounts(initialData);
+  }, []);
+
   useEffect(() => {
     if (!routeEnabled) {
       const debounce = setTimeout(() => fetchSuggestions(query, setSuggestions, setLoading), 400);
@@ -431,23 +510,23 @@ export default function MapComponent() {
 
         {/* Saved places */}
         <div className="mb-4">
-          <div className="flex items-center justify-between">
-            <label className="block text-lg font-bold text-gray-700">Saved Places</label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-lg font-bold text-gray-700">Saved Places</label>
             <button
               onClick={() => setShowSavedPlaces(!showSavedPlaces)}
-              className="text-blue-500 text-sm"
+              className="text-blue-500 text-sm hover:underline"
             >
               {showSavedPlaces ? "Hide" : "Show"}
             </button>
           </div>
 
           {showSavedPlaces && (
-            <div className="mt-2 max-h-40 overflow-y-auto">
+            <div className="mt-2 max-h-52 overflow-y-auto border border-gray-200 rounded-lg">
               {savedPlaces.length > 0 ? (
                 savedPlaces.map((place, index) => (
                   <div
                     key={index}
-                    className="p-2 text-sm border-b border-gray-200 text-black hover:bg-gray-100 cursor-pointer"
+                    className="flex items-center gap-2 p-3 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
                     onClick={() => {
                       const lat = parseFloat(place.lat);
                       const lon = parseFloat(place.lon);
@@ -455,15 +534,37 @@ export default function MapComponent() {
                       setQuery(place.display_name);
                     }}
                   >
-                    {place.display_name}
+                    <span className="text-red-500">
+                      📍
+                    </span>
+                    <span className="font-medium text-gray-800">{place.display_name}</span>
                   </div>
                 ))
               ) : (
-                <p className="text-gray-500 text-sm mt-1">No saved places</p>
+                <p className="text-gray-500 text-sm p-3">No saved places</p>
               )}
             </div>
           )}
         </div>
+
+        {/* Bar Chart Section */}
+        {/* <div className="absolute left-0 bottom-0 w-full flex flex-col justify-center items-center bg-white shadow-md rounded-t-lg p-4">
+          <h3 className="text-lg font-bold text-gray-800 mb-2">Tile Usage by Zoom</h3>
+          <div className="w-full h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={tileUsageData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="zoom" label={{ value: "Zoom Level", position: "insideBottom", offset: -5 }} />
+                <YAxis label={{ value: "Tiles Loaded", angle: -90, position: "insideLeft" }} />
+                <Tooltip />
+                <Bar dataKey="tiles" fill="#3b82f6" name="Tiles Loaded" />
+              </BarChart>
+            </ResponsiveContainer>
+
+          </div>
+        </div> */}
+
+
       </div>
 
       {/* <div className="max-w-[calc(100% - 80px)] w-full h-screen"> */}
@@ -504,7 +605,7 @@ export default function MapComponent() {
                 <div className="absolute right-0 top-1/2 transform -translate-y-1/2 animate-spin w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full"></div>
               )}
               {suggestions.length > 0 && (
-                <ul className="absolute  top-full left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">
+                <ul className="absolute  top-full left-6 md:left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">
                   {suggestions.map((s, i) => (
                     <li
                       key={i}

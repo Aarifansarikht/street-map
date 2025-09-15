@@ -15,7 +15,7 @@ import { useIsMobile, useIsSmallScreen } from "../hooks/windowResize";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -184,7 +184,12 @@ export default function MapComponent() {
 
       // Type check
       if (Array.isArray(data)) {
-        const suggestions: Suggestion[] = data.map((item: any) => ({
+        const suggestions: Suggestion[] = data.map((item: {
+  display_name: string;
+  lat: string;
+  lon: string;
+  // add other properties if you use them
+}) => ({
           lat: item.lat,
           lon: item.lon,
           display_name: item.display_name,
@@ -194,7 +199,7 @@ export default function MapComponent() {
         setFn([]);
       }
     } catch (err) {
-      if ((err as any).name !== "AbortError") {
+if (err instanceof Error && err.name !== "AbortError") {
         console.error("Suggestion fetch error:", err);
       }
     } finally {

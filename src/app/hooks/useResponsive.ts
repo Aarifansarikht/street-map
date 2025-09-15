@@ -108,7 +108,7 @@ export const useResponsiveGrid = (columns: {
   desktop?: number;
   xlarge?: number;
 }) => {
-  const breakpoint = useResponsiveValue({
+  const  breakpoint  = useResponsiveValue({
     mobile: columns.mobile ?? 1,
     tablet: columns.tablet ?? 2,
     laptop: columns.laptop ?? 3,
@@ -161,7 +161,7 @@ export const useResponsiveFontSize = (sizes: {
   });
 };
 
-// Container queries hook (for component-level responsiveness)
+// Containers queries hook (for component-level responsiveness)
 export const useContainerQuery = (containerRef: React.RefObject<HTMLElement>, query: string) => {
   const [matches, setMatches] = useState(false);
 

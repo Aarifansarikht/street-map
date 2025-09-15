@@ -14,16 +14,7 @@ import { useIsSmallScreen } from "../hooks/windowResize";
 // import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
-// Tell TypeScript that _getIconUrl may exist
-declare module "leaflet" {
-  interface IconDefault {
-    _getIconUrl?: () => string;
-  }
-}
-
-// Now you can safely delete it
-delete (L.Icon.Default.prototype as L.IconDefault)._getIconUrl;
-
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -198,7 +189,12 @@ export default function MapComponent() {
 
       // Type check
       if (Array.isArray(data)) {
-        const suggestions: Suggestion[] = data.map((item: NominatimItem) => ({
+        const suggestions: Suggestion[] = data.map((item: {
+  display_name: string;
+  lat: string;
+  lon: string;
+  // add other properties if you use them
+}) => ({
           lat: item.lat,
           lon: item.lon,
           display_name: item.display_name,

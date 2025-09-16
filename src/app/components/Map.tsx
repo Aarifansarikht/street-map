@@ -1,20 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, ZoomControl, } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, ZoomControl, useMapEvents, } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import "leaflet";
 import { unBound } from "../layout";
-import Image from "next/image";
 import { HiArrowsUpDown } from "react-icons/hi2";
 import { FaMapMarkerAlt } from "react-icons/fa";
-import { useMapEvents } from "react-leaflet";
 import { VscThreeBars } from "react-icons/vsc";
 import { TiTimes } from "react-icons/ti";
-import { useIsMobile, useIsSmallScreen } from "../hooks/windowResize";
+import { useIsSmallScreen } from "../hooks/windowResize";
+// import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -46,12 +46,66 @@ const currentLocationIcon = new L.Icon({
   iconAnchor: [15, 45],
 });
 
+function ClickHandler({
+  setMarker,
+  setClickedLocation,
+}: {
+  setMarker: (pos: [number, number]) => void;
+  setClickedLocation: (loc: Suggestion | null) => void;
+}) {
+  useMapEvents({
+    async click(e) {
+      const pos: [number, number] = [e.latlng.lat, e.latlng.lng];
+      console.log("Clicked location:", pos);
+
+      setMarker(pos);
+
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${pos[0]}&lon=${pos[1]}&format=json`,
+          {
+            headers: {
+              "Accept": "application/json",
+              "User-Agent": "MapSentinelApp/1.0", // required by Nominatim policy
+            },
+            mode: "cors",
+          }
+        );
+
+        const data = await res.json();
+        if (data && data.display_name) {
+          setClickedLocation({
+            lat: pos[0].toString(),
+            lon: pos[1].toString(),
+            display_name: data.display_name,
+          });
+        }
+      } catch (err) {
+        console.error("Reverse geocode error:", err);
+        setClickedLocation(null);
+      }
+    },
+  });
+  return null;
+}
+
+
+
 // Change map view
 function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: number }) {
   const map = useMap();
   map.setView(coords, zoom);
   return null;
 }
+
+// const tileUsageData = [
+//   { zoom: "5", tiles: 120 },
+//   { zoom: "10", tiles: 350 },
+//   { zoom: "15", tiles: 780 },
+//   { zoom: "20", tiles: 1500 },
+// ];
+
+
 
 
 function ScaleControl() {
@@ -118,6 +172,8 @@ export default function MapComponent() {
   const [tileAttribution, setTileAttribution] = useState(
     '&copy; <a href="https://www.openstreetmap.org/">OSM</a> contributors'
   );
+  const [marker, setMarker] = useState<[number, number] | null>(null);
+
 
   const [routeEnabled, setRouteEnabled] = useState(false);
   const [transportMode, setTransportMode] = useState<"driving" | "walking" | "cycling">("driving");
@@ -125,6 +181,7 @@ export default function MapComponent() {
   // Single search
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [clickedLocation, setClickedLocation] = useState<Suggestion | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Start & Destination
@@ -141,35 +198,63 @@ export default function MapComponent() {
   // User location
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [tileCounts, setTileCounts] = useState<{ zoom: number; tiles: number }[]>([]);
 
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<Suggestion[]>([]);
-  const [showSavedPlaces, setShowSavedPlaces] = useState(false);
+  const [showSavedPlaces, setShowSavedPlaces] = useState(true);
   const isMobile = useIsSmallScreen();
   const [showSidebar, setShowSidebar] = useState(isMobile);
   // Fetch suggestions
   const fetchSuggestions = async (
     q: string,
     setFn: React.Dispatch<React.SetStateAction<Suggestion[]>>,
-    setLoadingFn: React.Dispatch<React.SetStateAction<boolean>>
+    setLoadingFn: React.Dispatch<React.SetStateAction<boolean>>,
+    signal?: AbortSignal
   ) => {
     if (q.length < 2) {
       setFn([]);
       return;
     }
+
     setLoadingFn(true);
+
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`,
+        { signal }
       );
-      const data: Suggestion[] = await res.json();
-      setFn(data);
-    } catch (err) {
-      console.error("Suggestion fetch error:", err);
+
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
+      const data: unknown = await res.json();
+
+      // Type check
+      if (Array.isArray(data)) {
+        const suggestions: Suggestion[] = data.map((item: {
+          display_name: string;
+          lat: string;
+          lon: string;
+          // add other properties if you use them
+        }) => ({
+          lat: item.lat,
+          lon: item.lon,
+          display_name: item.display_name,
+        }));
+        setFn(suggestions);
+      } else {
+        setFn([]);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== "AbortError") {
+        console.error("Suggestion fetch error:", err);
+      }
     } finally {
       setLoadingFn(false);
     }
+
   };
+
 
   // Calculate route
   const calculateRoute = async () => {
@@ -259,8 +344,55 @@ export default function MapComponent() {
     setRoute(null);
   };
 
+  function MonitoredTileLayer({
+    url,
+    attribution,
+    onTileLoad,
+  }: {
+    url: string;
+    attribution: string;
+    onTileLoad: (zoom: number) => void;
+  }) {
+    const map = useMap();
 
+    useEffect(() => {
+      const tileLayer = L.tileLayer(url, { attribution }).addTo(map);
+
+      tileLayer.on("tileload", (e) => {
+        const zoom = map.getZoom();
+        onTileLoad(zoom);
+      });
+
+      return () => {
+        tileLayer.remove();
+      };
+    }, [map, url, attribution, onTileLoad]);
+
+    return null;
+  }
+
+
+  // const handleTileLoad = (zoom: number) => {
+  //   setTileCounts((prev) =>
+  //     prev.map((item) =>
+  //       item.zoom === zoom ? { ...item, tiles: item.tiles + 1 } : item
+  //     )
+  //   );
+  //   const count = tileCounts.find((item) => item.zoom === zoom)?.tiles ?? 0;
+  //   console.log(`Zoom ${zoom}: ${count + 1} tiles loaded`);
+
+  // };
   // Effects
+
+  useEffect(() => {
+    // Initialize for all zoom levels you want
+    const initialData: { zoom: number; tiles: number }[] = [];
+    for (let z = 1; z <= 20; z++) {
+      initialData.push({ zoom: z, tiles: 0 });
+    }
+    setTileCounts(initialData);
+  }, []);
+
   useEffect(() => {
     if (!routeEnabled) {
       const debounce = setTimeout(() => fetchSuggestions(query, setSuggestions, setLoading), 400);
@@ -308,6 +440,7 @@ export default function MapComponent() {
     setQuery(s.display_name);
     setSuggestions([]);
     savePlace();
+    setMarker([lat, lon]); // always update marker here
 
   };
 
@@ -331,6 +464,19 @@ export default function MapComponent() {
 
   };
 
+  const swapLocations = () => {
+    // Swap coordinates
+    const tempCoords = startCoords;
+    setStartCoords(destCoords);
+    setDestCoords(tempCoords);
+
+    // Swap search queries (display names)
+    const tempQuery = startQuery;
+    setStartQuery(destQuery);
+    setDestQuery(tempQuery);
+  };
+
+
   const changeTile = (option: string) => {
     switch (option) {
       case "OSM":
@@ -349,8 +495,26 @@ export default function MapComponent() {
         setTileUrl("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}");
         setTileAttribution("Tiles &copy; Esri &copy; Earthstar Geographics");
         break;
+      case "OpenTopoMap":
+        setTileUrl("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png");
+        setTileAttribution('Map data: &copy; <a href="https://www.openstreetmap.org/">OSM</a>, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>');
+        break;
+      case "Esri Streets":
+        setTileUrl("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}");
+        setTileAttribution("Tiles &copy; Esri &copy; OpenStreetMap contributors");
+        break;
+      case "Transit":
+        setTileUrl("https://tile.thunderforest.com/transport/{z}/{x}/{y}.png?apikey=5b376f4b498b4b18a4e0aa7c5d39e3e9");
+        setTileAttribution('Map data &copy; <a href="https://www.openstreetmap.org/">OSM</a> contributors, Tiles &copy; Thunderforest');
+        break;
+      case "Terrain":
+        setTileUrl("https://tile.thunderforest.com/landscape/{z}/{x}/{y}.png?apikey=5b376f4b498b4b18a4e0aa7c5d39e3e9");
+        setTileAttribution('Map data &copy; <a href="https://www.openstreetmap.org/">OSM</a> contributors, Tiles &copy; Thunderforest');
+        break;
     }
   };
+
+
 
   return (
     <div className="flex flex-col md:flex-row h-screen w-full max-w-full mx-auto bg-gray-50 shadow-lg">
@@ -371,18 +535,22 @@ export default function MapComponent() {
           {locationError && <p className="text-red-500 text-sm mt-1">{locationError}</p>}
         </div>
 
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-4 flex items-center gap-3">
           <input
             type="checkbox"
+            id="routeToggle"
             checked={routeEnabled}
             onChange={() => {
               setRouteEnabled(!routeEnabled);
               setRoute(null);
             }}
-            id="routeToggle"
+            className="w-5 h-5 accent-green-600 cursor-pointer"
           />
-          <label htmlFor="routeToggle" className="text-gray-700 text-sm">
-            Enable Route Planning
+          <label
+            htmlFor="routeToggle"
+            className="text-gray-800 font-medium cursor-pointer select-none"
+          >
+            {routeEnabled ? "Route Planning Enabled" : "Enable Route Planning"}
           </label>
         </div>
 
@@ -396,24 +564,16 @@ export default function MapComponent() {
             <option>Carto Light</option>
             <option>Carto Dark</option>
             <option>Satellite</option>
+            <option>Transit</option>
+            <option>Terrain</option>
+            <option>OpenTopoMap</option>
+            <option>Esri Streets</option>
           </select>
+
         </div>
 
-        {/* <div className="mb-4">
-          <label className="block text-sm font-medium mb-1 text-gray-700">Zoom</label>
-          <input
-            type="range"
-            min={1}
-            max={20}
-            value={zoom}
-            onChange={(e) => setZoom(parseInt(e.target.value))}
-            className="w-full"
-          />
-          <div className="text-sm mt-1 text-gray-700">{zoom}</div>
-        </div> */}
-
         {/* Route options */}
-        {routeEnabled && (
+        {/* {routeEnabled && (
           <>
 
 
@@ -427,27 +587,27 @@ export default function MapComponent() {
               </div>
             )}
           </>
-        )}
+        )} */}
 
         {/* Saved places */}
         <div className="mb-4">
-          <div className="flex items-center justify-between">
-            <label className="block text-lg font-bold text-gray-700">Saved Places</label>
-            <button
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-lg font-bold text-gray-700">Saved Places</label>
+            {/* <button
               onClick={() => setShowSavedPlaces(!showSavedPlaces)}
-              className="text-blue-500 text-sm"
+              className="text-blue-500 text-sm hover:underline"
             >
               {showSavedPlaces ? "Hide" : "Show"}
-            </button>
+            </button> */}
           </div>
 
           {showSavedPlaces && (
-            <div className="mt-2 max-h-40 overflow-y-auto">
+            <div className="mt-2 max-h-52 overflow-y-auto border border-gray-200 rounded-lg">
               {savedPlaces.length > 0 ? (
                 savedPlaces.map((place, index) => (
                   <div
                     key={index}
-                    className="p-2 text-sm border-b border-gray-200 text-black hover:bg-gray-100 cursor-pointer"
+                    className="flex items-center gap-2 p-3 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
                     onClick={() => {
                       const lat = parseFloat(place.lat);
                       const lon = parseFloat(place.lon);
@@ -455,15 +615,79 @@ export default function MapComponent() {
                       setQuery(place.display_name);
                     }}
                   >
-                    {place.display_name}
+                    <span className="text-red-500">
+                      📍
+                    </span>
+                    <span className="font-medium text-gray-800">{place.display_name}</span>
                   </div>
                 ))
               ) : (
-                <p className="text-gray-500 text-sm mt-1">No saved places</p>
+                <p className="text-gray-500 text-sm p-3">No saved places</p>
               )}
             </div>
           )}
         </div>
+
+        {/* Bar Chart Section */}
+        {/* <div className="absolute left-0 bottom-0 w-full flex flex-col justify-center items-center bg-white shadow-md rounded-t-lg p-4">
+          <h3 className="text-lg font-bold text-gray-800 mb-2">Tile Usage by Zoom</h3>
+          <div className="w-full h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={tileUsageData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="zoom" label={{ value: "Zoom Level", position: "insideBottom", offset: -5 }} />
+                <YAxis label={{ value: "Tiles Loaded", angle: -90, position: "insideLeft" }} />
+                <Tooltip />
+                <Bar dataKey="tiles" fill="#3b82f6" name="Tiles Loaded" />
+              </BarChart>
+            </ResponsiveContainer>
+
+          </div>
+        </div> */}
+        {clickedLocation && !routeEnabled && (
+          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-xl rounded-xl p-4 border border-gray-200 w-[90%] max-w-sm z-50 animate-slide-up">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="font-bold text-gray-800 mb-2 text-lg">Selected Location</h3>
+                <p className="text-sm text-gray-600 mb-2">{clickedLocation.display_name}</p>
+                {/* <div className="text-sm text-gray-500 space-y-1">
+                  <p>Latitude: <span className="font-medium">{parseFloat(clickedLocation.lat).toFixed(6)}</span></p>
+                  <p>Longitude: <span className="font-medium">{parseFloat(clickedLocation.lon).toFixed(6)}</span></p>
+                </div> */}
+              </div>
+              <button
+                onClick={() => setClickedLocation(null)}
+                className="text-gray-400 hover:text-gray-700 ml-2"
+                title="Close"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => {
+                  setDestCoords([parseFloat(clickedLocation.lat), parseFloat(clickedLocation.lon)]);
+                  setDestQuery(clickedLocation.display_name);
+                  setRouteEnabled(true);
+                }}
+                className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+              >
+                Directions
+              </button>
+              <button
+                onClick={() => {
+                  setSavedPlaces([...savedPlaces, clickedLocation]);
+                  localStorage.setItem("savedPlaces", JSON.stringify([...savedPlaces, clickedLocation]));
+                }}
+                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* <div className="max-w-[calc(100% - 80px)] w-full h-screen"> */}
@@ -504,7 +728,7 @@ export default function MapComponent() {
                 <div className="absolute right-0 top-1/2 transform -translate-y-1/2 animate-spin w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full"></div>
               )}
               {suggestions.length > 0 && (
-                <ul className="absolute  top-full left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">
+                <ul className="absolute  top-full left-6 md:left-0 bg-white border border-gray-200 rounded-lg shadow-md max-h-60 overflow-auto z-[1000] mt-1 w-full max-w-sm">
                   {suggestions.map((s, i) => (
                     <li
                       key={i}
@@ -613,7 +837,9 @@ export default function MapComponent() {
             </div>
 
             {/* Swap button */}
-            <button className="flex items-center justify-center w-10 h-10 rounded-lg">
+            <button
+              onClick={swapLocations}
+              className="flex items-center justify-center w-10 h-10 rounded-lg">
               <HiArrowsUpDown className="text-2xl font-bold text-gray-700" />
             </button>
           </div>
@@ -625,6 +851,68 @@ export default function MapComponent() {
           </button>
         </div>
       )}
+      {route && routeEnabled && (
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 w-[90%] max-w-sm z-50">
+          <div className="backdrop-blur-lg bg-white/30 border border-white/40 rounded-2xl shadow-xl p-4 animate-fade-in hover:scale-105 transition-transform duration-300">
+
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                Route Info
+              </h3>
+              <button
+                onClick={() => setRoute(null)}
+                className="text-gray-700 hover:text-gray-900 transition text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Distance */}
+            <div className="flex flex-col mb-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-2xl bg-gradient-to-r from-green-400 to-blue-500 text-transparent bg-clip-text">📏</span>
+                <div>
+                  <p className="text-xs text-gray-700">Distance</p>
+                  <p className="font-semibold text-gray-900 text-sm">{route.distance.toFixed(2)} km</p>
+                </div>
+              </div>
+              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-1.5 bg-gradient-to-r from-green-400 to-blue-500"
+                  style={{ width: `${Math.min((route.distance / 50) * 100, 100)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div className="flex flex-col mb-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-2xl bg-gradient-to-r from-yellow-400 to-red-500 text-transparent bg-clip-text">⏱️</span>
+                <div>
+                  <p className="text-xs text-gray-700">Estimated Time</p>
+                  <p className="font-semibold text-gray-900 text-sm">{route.duration.toFixed(0)} min</p>
+                </div>
+              </div>
+              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-1.5 bg-gradient-to-r from-yellow-400 to-red-500"
+                  style={{ width: `${Math.min((route.duration / 60) * 100, 100)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="flex justify-between gap-2 mt-3">
+              <button className="flex-1 py-1.5 bg-white/40 backdrop-blur-md text-gray-900 font-semibold rounded-xl hover:bg-white/60 transition text-sm">
+                🚦 Start
+              </button>
+              <button className="flex-1 py-1.5 bg-white/40 backdrop-blur-md text-gray-900 font-semibold rounded-xl hover:bg-white/60 transition text-sm">
+                🏁 End
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Map Section */}
       <div className="flex-1 relative z-0">
@@ -636,6 +924,8 @@ export default function MapComponent() {
           <MapContainer center={coords} zoom={zoom} style={{ height: "100%", width: "100%" }} zoomControl={false} >
 
             <TileLayer url={tileUrl} attribution={tileAttribution} />
+            <ClickHandler setMarker={setMarker} setClickedLocation={setClickedLocation} />
+
             <ZoomControl position="bottomright" />
             <ChangeMapView coords={coords} zoom={zoom} />
             {/* <MapLogger />   */}
@@ -643,14 +933,14 @@ export default function MapComponent() {
 
 
             {/* Current location marker */}
-            {userLocation && (
+            {/* {userLocation && (
               <Marker position={userLocation} icon={currentLocationIcon}>
                 <Popup>Your current location</Popup>
               </Marker>
-            )}
+            )} */}
 
             {/* Single location marker */}
-            {!routeEnabled && <Marker position={coords} icon={markerIcon} />}
+            {/* {!routeEnabled && <Marker position={coords} icon={markerIcon} />} */}
 
             {/* Route markers */}
             {routeEnabled && startCoords && (
@@ -668,6 +958,14 @@ export default function MapComponent() {
             {/* Route polyline */}
             {routeEnabled && route && (
               <Polyline positions={route.coordinates} color="blue" weight={4} opacity={0.7} />
+            )}
+            {marker && !routeEnabled && (
+              <Marker position={marker} icon={markerIcon}>
+                <Popup>
+                  📍 Selected Location <br />
+                  {marker[0].toFixed(4)}, {marker[1].toFixed(4)}
+                </Popup>
+              </Marker>
             )}
 
           </MapContainer>

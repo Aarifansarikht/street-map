@@ -14,7 +14,7 @@ export const useResponsive = () => {
     const handleResize = () => {
       const width = window.innerWidth;
       const height = window.innerHeight;
-      
+
       setWindowSize({ width, height });
       setBreakpoint(getBreakpoint(width));
       setOrientation(width > height ? 'landscape' : 'portrait');
@@ -82,7 +82,7 @@ export const useResponsiveValue = <T>(values: {
   default: T;
 }) => {
   const { breakpoint } = useResponsive();
-  
+
   switch (breakpoint) {
     case 'mobile':
       return values.mobile ?? values.default;
@@ -108,7 +108,7 @@ export const useResponsiveGrid = (columns: {
   desktop?: number;
   xlarge?: number;
 }) => {
-  const { breakpoint } = useResponsiveValue({
+  const  breakpoint  = useResponsiveValue({
     mobile: columns.mobile ?? 1,
     tablet: columns.tablet ?? 2,
     laptop: columns.laptop ?? 3,
@@ -169,16 +169,16 @@ export const useContainerQuery = (containerRef: React.RefObject<HTMLElement>, qu
     if (!containerRef.current) return;
 
     const container = containerRef.current;
-    
+
     // Create a ResizeObserver to watch container size changes
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width } = entry.contentRect;
-        
+
         // Parse the query (e.g., "min-width: 400px")
         const [property, value] = query.split(':').map(s => s.trim());
         const numericValue = parseInt(value.replace('px', ''));
-        
+
         let matchesQuery = false;
         switch (property) {
           case 'min-width':
@@ -191,13 +191,13 @@ export const useContainerQuery = (containerRef: React.RefObject<HTMLElement>, qu
             matchesQuery = width === numericValue;
             break;
         }
-        
+
         setMatches(matchesQuery);
       }
     });
 
     resizeObserver.observe(container);
-    
+
     return () => {
       resizeObserver.disconnect();
     };
@@ -215,7 +215,7 @@ export const useResponsiveImage = (src: string, sizes?: {
   xlarge?: string;
 }) => {
   const { breakpoint } = useResponsive();
-  
+
   const getImageSize = () => {
     switch (breakpoint) {
       case 'mobile':
@@ -244,7 +244,7 @@ export const useResponsiveImage = (src: string, sizes?: {
 // Responsive visibility hook
 export const useResponsiveVisibility = () => {
   const { breakpoint } = useResponsive();
-  
+
   return {
     showOnMobile: ['mobile'].includes(breakpoint),
     showOnTablet: ['small-tablet', 'tablet'].includes(breakpoint),
@@ -260,7 +260,7 @@ export const useResponsiveVisibility = () => {
 // Responsive layout hook
 export const useResponsiveLayout = () => {
   const { breakpoint, width, height } = useResponsive();
-  
+
   return {
     isPortrait: height > width,
     isLandscape: width > height,

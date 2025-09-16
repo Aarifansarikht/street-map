@@ -161,7 +161,7 @@ export const useResponsiveFontSize = (sizes: {
   });
 };
 
-// Containers queries hook (for component-level responsiveness)
+// Container queries hook (for component-level responsiveness)
 export const useContainerQuery = (containerRef: React.RefObject<HTMLElement>, query: string) => {
   const [matches, setMatches] = useState(false);
 

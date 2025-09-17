@@ -375,9 +375,6 @@ export default function MapComponent() {
 
     return null;
   }
-
-
-
   // Calculate route
   const calculateRoute = async () => {
     if (!startCoords || !destCoords) return;
@@ -465,19 +462,6 @@ export default function MapComponent() {
     setDestCoords(null);
     setRoute(null);
   };
-
-  // const handleTileLoad = (zoom: number) => {
-  //   setTileCounts((prev) =>
-  //     prev.map((item) =>
-  //       item.zoom === zoom ? { ...item, tiles: item.tiles + 1 } : item
-  //     )
-  //   );
-  //   const count = tileCounts.find((item) => item.zoom === zoom)?.tiles ?? 0;
-  //   console.log(`Zoom ${zoom}: ${count + 1} tiles loaded`);
-
-  // };
-  // Effects
-
   useEffect(() => {
     // Initialize for all zoom levels you want
     const initialData: { zoom: number; tiles: number }[] = [];
@@ -648,6 +632,24 @@ Generated: ${new Date().toLocaleString()}`;
     a.click();
     URL.revokeObjectURL(url);
   };
+  function RecenterMap({ startCoords, destCoords }: { startCoords: [number, number] | null, destCoords: [number, number] | null }) {
+    const map = useMap();
+
+    useEffect(() => {
+      if (startCoords && destCoords) {
+        // Fit map bounds to include both points
+        const bounds = L.latLngBounds([startCoords, destCoords]);
+        map.fitBounds(bounds, { padding: [50, 50] });
+      } else if (startCoords) {
+        map.setView(startCoords, 13);
+      } else if (destCoords) {
+        map.setView(destCoords, 13);
+      }
+    }, [startCoords, destCoords, map]);
+
+    return null;
+  }
+
 
 
 
@@ -733,6 +735,11 @@ Generated: ${new Date().toLocaleString()}`;
             onChange={() => {
               setRouteEnabled(!routeEnabled);
               setRoute(null);
+              if (window.innerWidth < 768) {
+                setShowSidebar(true);
+              } else {
+                setShowSidebar(false)
+              }
             }}
             className="w-5 h-5 accent-green-600 cursor-pointer"
           />
@@ -778,6 +785,7 @@ Generated: ${new Date().toLocaleString()}`;
                       const lat = parseFloat(place.lat);
                       const lon = parseFloat(place.lon);
                       setCoords([lat, lon]);
+                      setMarker([lat, lon]); // always update marker here
                       setQuery(place.display_name);
                     }}
                   >
@@ -796,8 +804,14 @@ Generated: ${new Date().toLocaleString()}`;
 
         {/* Tile Usage Card */}
         <div className="bg-white rounded-xl shadow-md p-5 mb-6">
-          <div className="flex items-center mb-4">
+          <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold text-gray-900">Tile Usage</h2>
+             <button
+              onClick={handleDownloadReport}
+              className="md:hidden flex items-center justify-center w-8 h-8 p-2 bg-[#6D8196] text-white rounded-full hover:bg-[#46515A] text-sm font-medium transition-colors"
+            >
+              <Download className="h-4 w-4" />
+            </button>
           </div>
 
           {/* Progress */}
@@ -931,10 +945,10 @@ Generated: ${new Date().toLocaleString()}`;
       )}
       {routeEnabled && (
         <div className="relative md:absolute left-0 md:left-28 md:right-0 my-2 md:mt-4 px-2 md:px-4 z-50 flex justify-between items-start">
-          <div className="bg-white flex gap-4 rounded-xl mx-auto justify-center items-center p-4 shadow-md w-full max-w-lg border border-gray-200">
+          <div className="sm:bg-white flex gap-4 rounded-xl mx-auto justify-center items-center p-4 shadow-md w-full max-w-lg border border-gray-200">
 
             {/* Icons column */}
-            <div className="flex flex-col items-center h-full">
+            <div className="flex flex-col items-center max-sm:gap-3 h-full">
               <span className="text-gray-600 text-lg">○</span>
               <div className="flex-1 border-l-2 border-dotted border-gray-500 mb-2"></div>
               <FaMapMarkerAlt className="text-red-600 text-lg" />
@@ -1032,7 +1046,7 @@ Generated: ${new Date().toLocaleString()}`;
         </div>
       )}
       {route && routeEnabled && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 w-[80%] max-w-sm z-50">
+        <div className="absolute bottom-22 md:bottom-4 left-1/2 transform -translate-x-1/2 w-full h- sm:w-[80%] max-w-sm z-50">
           <div className="backdrop-blur-lg bg-white border border-gray-200 rounded-2xl shadow-xl p-4 animate-fade-in hover:scale-105 transition-transform duration-300">
 
             {/* Header */}
@@ -1041,7 +1055,10 @@ Generated: ${new Date().toLocaleString()}`;
                 Route Info
               </h3>
               <button
-                onClick={() => setRoute(null)}
+                onClick={() => {
+                  setRoute(null)
+                  setRouteEnabled(false)
+                }}
                 className="text-gray-600 hover:text-red-600 transition text-lg font-bold"
               >
                 ✕
@@ -1078,7 +1095,7 @@ Generated: ${new Date().toLocaleString()}`;
         </div>
       )}
 
-      <div className="absolute bottom-8 right-12 w-[85%] max-w-xs z-50">
+      <div className="absolute bottom-8 right-12 w-[85%] max-w-xs z-40">
         <div className="bg-white/90 backdrop-blur-md rounded-xl shadow-md flex flex-row justify-between items-center gap-3 px-3 py-2 border border-gray-200">
           {/* Zoom */}
           <div className="text-center">
@@ -1098,7 +1115,7 @@ Generated: ${new Date().toLocaleString()}`;
       </div>
 
       {clickedLocation && !routeEnabled && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-xl rounded-xl p-4 border border-gray-200 w-[90%] max-w-sm z-50 animate-slide-up">
+        <div className="absolute bottom-22 md:bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-xl rounded-xl p-4 border border-gray-200 w-full md:w-[90%] max-w-sm z-50 animate-slide-up">
           <div className="flex justify-between items-start">
             <div>
               <h3 className="font-bold text-gray-800 mb-2 text-lg">Selected Location</h3>
@@ -1179,18 +1196,19 @@ Generated: ${new Date().toLocaleString()}`;
               </Marker>
             )}
             <ZoomWatcher setZoomLevel={setZoomLevel} />
+            {/* <RecenterMap startCoords={startCoords} destCoords={destCoords} /> */}
 
             {userLocation && (
               <Marker position={userLocation} icon={currentLocationIcon}>
                 <Popup>Current Location</Popup>
               </Marker>
             )}
-            {startCoords && (
+            {startCoords && routeEnabled && (
               <Marker position={startCoords} icon={startIcon}>
                 <Popup>Start: {startQuery}</Popup>
               </Marker>
             )}
-            {destCoords && (
+            {destCoords && routeEnabled && (
               <Marker position={destCoords} icon={endIcon}>
                 <Popup>Destination: {destQuery}</Popup>
               </Marker>

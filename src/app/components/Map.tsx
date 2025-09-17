@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { MapContainer, TileLayer, Marker, Polyline, useMap, Popup, ZoomControl, useMapEvents, } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -11,6 +11,7 @@ import { FaMapMarkerAlt } from "react-icons/fa";
 import { VscThreeBars } from "react-icons/vsc";
 import { TiTimes } from "react-icons/ti";
 import { useIsSmallScreen } from "../hooks/windowResize";
+import { Download } from "lucide-react";
 // import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // Fix for default markers in react-leaflet
@@ -94,9 +95,14 @@ function ClickHandler({
 // Change map view
 function ChangeMapView({ coords, zoom }: { coords: [number, number]; zoom: number }) {
   const map = useMap();
-  map.setView(coords, zoom);
+
+  useEffect(() => {
+    map.setView(coords, zoom);
+  }, [coords, zoom, map]);
+
   return null;
 }
+
 
 // const tileUsageData = [
 //   { zoom: "5", tiles: 120 },
@@ -161,9 +167,68 @@ interface Route {
 }
 interface MonitoredTileLayerProps {
   url: string;
-  attribution: string;
-  maxRequestsPerSecond?: number;
+  attribution?: string;
+  trackTileRequest: (tiles: number, action: string) => void;
+  tileUsage: { todayRequests: number; limit: number };
+  setLimitReached: React.Dispatch<React.SetStateAction<boolean>>;
 }
+
+type TileUsage = {
+  totalRequests: number;
+  todayRequests: number;
+  lastHour: number;
+  limit: number;
+  requestsToday: { timestamp: number; tiles: number; zoom: number }[];
+  currentSession: number;
+};
+
+type TileRequest = {
+  timestamp: number;
+  tiles: number;
+  zoom: number;
+  layer: string;
+  position: [number, number];
+  action: string;
+};
+
+
+const MonitoredTileLayer: React.FC<MonitoredTileLayerProps> = ({ url, attribution, trackTileRequest, tileUsage, setLimitReached, }) => {
+  const map = useMap();
+  useEffect(() => {
+    // Check if a layer with this attribution already exists to prevent duplicates
+    let tileLayer: L.TileLayer | null = null;
+    map.eachLayer(layer => {
+      if (layer instanceof L.TileLayer && layer.options.attribution === attribution) {
+        tileLayer = layer;
+      }
+    });
+
+    if (!tileLayer) {
+      tileLayer = L.tileLayer(url, { attribution }).addTo(map);
+    }
+
+    const handleTileLoad = () => {
+      if (tileUsage.todayRequests >= tileUsage.limit) {
+        // Stop loading new tiles once limit is reached
+        if (tileLayer) {
+          map.removeLayer(tileLayer);
+          console.warn("Tile limit reached. No more tiles will load.");
+          setLimitReached(true)
+        }
+        return;
+      }
+      trackTileRequest(1, 'tileload');
+    };
+    tileLayer.on("tileload", handleTileLoad);
+
+    return () => {
+      tileLayer?.off("tileload", handleTileLoad);
+    };
+  }, [map, url, attribution, trackTileRequest]);
+  return null;
+};
+
+
 
 export default function MapComponent() {
   const [coords, setCoords] = useState<[number, number]>([28.6139, 77.209]); // default view (Delhi)
@@ -172,17 +237,29 @@ export default function MapComponent() {
   const [tileAttribution, setTileAttribution] = useState(
     '&copy; <a href="https://www.openstreetmap.org/">OSM</a> contributors'
   );
+  const [activeLayer, setActiveLayer] = useState('osm');
+
   const [marker, setMarker] = useState<[number, number] | null>(null);
 
 
   const [routeEnabled, setRouteEnabled] = useState(false);
   const [transportMode, setTransportMode] = useState<"driving" | "walking" | "cycling">("driving");
+  const [tileUsage, setTileUsage] = useState({
+    totalRequests: 0,
+    todayRequests: 0,
+    lastHour: 0,
+    limit: 10000,
+    requestsToday: [] as TileRequest[],
+    currentSession: 0
+  });
 
   // Single search
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [clickedLocation, setClickedLocation] = useState<Suggestion | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isMonitoring, setIsMonitoring] = useState(true);
+  const [zoomLevel, setZoomLevel] = useState(10);
 
   // Start & Destination
   const [requestCount, setRequestCount] = useState(0);
@@ -195,6 +272,8 @@ export default function MapComponent() {
   const [route, setRoute] = useState<Route | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [showHelp, setShowHelp] = useState(false)
+  const [limitReached, setLimitReached] = useState(false);
+
   // User location
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -254,6 +333,49 @@ export default function MapComponent() {
     }
 
   };
+
+  const trackTileRequest = useCallback((tiles = 1, action = 'unknown') => {
+    if (!isMonitoring) return;
+
+    setTileUsage((prev) => {
+      const newRequest: TileRequest = {
+        timestamp: Date.now(),
+        tiles,
+        zoom: zoomLevel,
+        layer: activeLayer,
+        position: [coords[0], coords[1]],
+        action,
+      };
+      return {
+        ...prev,
+        totalRequests: prev.totalRequests + tiles,
+        todayRequests: prev.todayRequests + tiles,
+        lastHour: prev.lastHour + tiles,
+        currentSession: prev.currentSession + tiles,
+        requestsToday: [...prev.requestsToday.slice(-99), newRequest]
+      };
+    });
+  }, [isMonitoring, zoomLevel, activeLayer, coords]);
+
+  function ZoomWatcher({ setZoomLevel }: { setZoomLevel: (z: number) => void }) {
+    const map = useMap();
+
+    useEffect(() => {
+      const handleZoom = () => {
+        setZoomLevel(map.getZoom());
+      };
+
+      map.on("zoomend", handleZoom);
+      setZoomLevel(map.getZoom()); // initialize with current zoom
+
+      return () => {
+        map.off("zoomend", handleZoom);
+      };
+    }, [map, setZoomLevel]);
+
+    return null;
+  }
+
 
 
   // Calculate route
@@ -343,34 +465,6 @@ export default function MapComponent() {
     setDestCoords(null);
     setRoute(null);
   };
-
-  function MonitoredTileLayer({
-    url,
-    attribution,
-    onTileLoad,
-  }: {
-    url: string;
-    attribution: string;
-    onTileLoad: (zoom: number) => void;
-  }) {
-    const map = useMap();
-
-    useEffect(() => {
-      const tileLayer = L.tileLayer(url, { attribution }).addTo(map);
-
-      tileLayer.on("tileload", (e) => {
-        const zoom = map.getZoom();
-        onTileLoad(zoom);
-      });
-
-      return () => {
-        tileLayer.remove();
-      };
-    }, [map, url, attribution, onTileLoad]);
-
-    return null;
-  }
-
 
   // const handleTileLoad = (zoom: number) => {
   //   setTileCounts((prev) =>
@@ -476,6 +570,87 @@ export default function MapComponent() {
     setDestQuery(tempQuery);
   };
 
+  const memoizedMonitoredTileLayer = useMemo(() => (
+    <MonitoredTileLayer
+      url={tileUrl}
+      attribution={tileAttribution}
+      trackTileRequest={trackTileRequest}
+      tileUsage={tileUsage}
+      setLimitReached={setLimitReached}
+    />
+  ), [tileUrl, tileAttribution, trackTileRequest]);
+
+  const handleDownloadReport = () => {
+    // Define tileLayers, currentPosition, and mapControls here or get them from state/props
+    const tileLayers = {
+      'osm': { name: 'OSM' },
+      'cartoLight': { name: 'Carto Light' },
+      // ... add other layers to match your options
+    };
+    const currentPosition = coords;
+    const mapControls = {
+      zoom: true,
+      scale: true,
+      // ... add other controls as needed
+    };
+
+    const report = {
+      period: "24 Hours",
+      totalTileRequests: tileUsage.todayRequests,
+      sessionRequests: tileUsage.currentSession,
+      averagePerHour: Math.round(tileUsage.todayRequests / 24),
+      mostUsedZoom: zoomLevel,
+      mostUsedLayer: activeLayer,
+      efficiency: ((tileUsage.limit - tileUsage.todayRequests) / tileUsage.limit * 100).toFixed(1),
+      recentRequests: tileUsage.requestsToday.slice(-10),
+    };
+
+    const reportText = `OpenStreetMap Usage Report - ${new Date().toLocaleDateString()}
+
+=== SUMMARY ===
+Period: ${report.period}
+Total Tile Requests: ${report.totalTileRequests.toLocaleString()}
+Session Requests: ${report.sessionRequests.toLocaleString()}
+Average Per Hour: ${report.averagePerHour.toLocaleString()}
+Current Zoom Level: ${report.mostUsedZoom}
+Average Per Hour: ${report.averagePerHour.toLocaleString()}
+Efficiency: ${report.efficiency}%
+Usage Limit: ${tileUsage.limit.toLocaleString()}
+
+=== RECENT ACTIVITY ===
+${report.recentRequests
+        .map(
+          (req) =>
+            `${new Date(req.timestamp).toLocaleTimeString()} | ${req.tiles
+              .toString()
+              .padStart(3)} tiles | ${req.action.padEnd(15)} | ${req.layer || 'Unknown'
+            } | Zoom ${req.zoom}`
+        )
+        .join("\n")}
+
+=== CURRENT STATUS ===
+Monitoring: ${isMonitoring ? "ACTIVE" : "PAUSED"}
+Map Position: ${currentPosition[0].toFixed(4)}, ${currentPosition[1].toFixed(4)}
+Controls: ${Object.entries(mapControls)
+        .filter(([_, enabled]) => enabled)
+        .map(([name]) => name)
+        .join(", ")}
+
+Generated: ${new Date().toLocaleString()}`;
+
+    const blob = new Blob([reportText], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `osm-usage-report-${new Date()
+      .toISOString()
+      .split("T")[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+
+
 
   const changeTile = (option: string) => {
     switch (option) {
@@ -519,23 +694,38 @@ export default function MapComponent() {
   return (
     <div className="flex flex-col md:flex-row h-screen w-full max-w-full mx-auto bg-gray-50 shadow-lg">
       {/* Sidebar */}
-      <div className={`w-[80%] md:w-80 bg-white p-4 shadow-md flex-shrink-0 overflow-y-auto max-h-screen md:relative fixed top-0 left-0 h-full z-50 transition-all ${!showSidebar ? "translate-x-0" : "-translate-x-full"}`}>
-        <h2 className={`text-2xl font-bold mb-4 text-gray-800 ${unBound.className} `}>Map Sentinel</h2>
-        <button className="absolute right-4 top-4 md:hidden block" onClick={() => setShowSidebar(!showSidebar)}>
-          <TiTimes className="text-2xl font-bold text-gray-700" />
-        </button>
-        {/* Location button */}
-        <div className="mb-4">
+      <div
+        className={`w-[80%] md:w-80 bg-white p-5 shadow-xl flex-shrink-0 overflow-y-auto max-h-screen md:relative fixed top-0 left-0 h-full z-50 transition-all ${!showSidebar ? "translate-x-0" : "-translate-x-full"
+          }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className={`text-2xl font-bold text-gray-800 ${unBound.className}`}>
+            Map Sentinel
+          </h2>
+          <button
+            className="md:hidden block"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            <TiTimes className="text-2xl font-bold text-gray-600 hover:text-gray-800 transition" />
+          </button>
+        </div>
+
+        {/* Location */}
+        <div className="mb-6">
           <button
             onClick={getUserLocation}
-            className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-blue-500 text-white py-2.5 px-4 rounded-lg hover:bg-blue-600 transition-colors flex items-center justify-center gap-2 shadow-sm"
           >
             <span>📍</span> Use My Location
           </button>
-          {locationError && <p className="text-red-500 text-sm mt-1">{locationError}</p>}
+          {locationError && (
+            <p className="text-red-500 text-sm mt-2">{locationError}</p>
+          )}
         </div>
 
-        <div className="mb-4 flex items-center gap-3">
+        {/* Route Toggle */}
+        <div className="flex items-center gap-3 mb-6 bg-gray-50 p-3 rounded-lg shadow-sm">
           <input
             type="checkbox"
             id="routeToggle"
@@ -554,10 +744,13 @@ export default function MapComponent() {
           </label>
         </div>
 
-        <div className="mb-4">
-          <label className="block text-lg font-bold mb-1 text-gray-700">Map Style</label>
+        {/* Map Style */}
+        <div className="mb-6">
+          <label className="block text-sm font-semibold mb-2 text-gray-700">
+            Map Style
+          </label>
           <select
-            className="w-full border border-gray-300 rounded px-2 py-1 text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-300"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-400"
             onChange={(e) => changeTile(e.target.value)}
           >
             <option>OSM</option>
@@ -569,45 +762,18 @@ export default function MapComponent() {
             <option>OpenTopoMap</option>
             <option>Esri Streets</option>
           </select>
-
         </div>
 
-        {/* Route options */}
-        {/* {routeEnabled && (
-          <>
-
-
-            {route && (
-              <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-                <h3 className="font-medium text-gray-800 mb-2">Route Info</h3>
-                <div className="text-sm text-gray-700">
-                  <p>Distance: <span className="font-semibold">{route.distance.toFixed(2)} km</span></p>
-                  <p>Estimated time: <span className="font-semibold">{route.duration.toFixed(0)} minutes</span></p>
-                </div>
-              </div>
-            )}
-          </>
-        )} */}
-
-        {/* Saved places */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-lg font-bold text-gray-700">Saved Places</label>
-            {/* <button
-              onClick={() => setShowSavedPlaces(!showSavedPlaces)}
-              className="text-blue-500 text-sm hover:underline"
-            >
-              {showSavedPlaces ? "Hide" : "Show"}
-            </button> */}
-          </div>
-
+        {/* Saved Places */}
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Saved Places</h3>
           {showSavedPlaces && (
-            <div className="mt-2 max-h-52 overflow-y-auto border border-gray-200 rounded-lg">
+            <div className="mt-2 max-h-52 overflow-y-auto border border-gray-200 rounded-lg shadow-sm">
               {savedPlaces.length > 0 ? (
                 savedPlaces.map((place, index) => (
                   <div
                     key={index}
-                    className="flex items-center gap-2 p-3 hover:bg-gray-100 cursor-pointer border-b last:border-b-0"
+                    className="flex items-center gap-2 p-3 hover:bg-gray-100 cursor-pointer border-b last:border-none"
                     onClick={() => {
                       const lat = parseFloat(place.lat);
                       const lon = parseFloat(place.lon);
@@ -615,10 +781,10 @@ export default function MapComponent() {
                       setQuery(place.display_name);
                     }}
                   >
-                    <span className="text-red-500">
-                      📍
+                    <span className="text-red-500">📍</span>
+                    <span className="font-medium text-gray-800 text-sm">
+                      {place.display_name}
                     </span>
-                    <span className="font-medium text-gray-800">{place.display_name}</span>
                   </div>
                 ))
               ) : (
@@ -628,67 +794,67 @@ export default function MapComponent() {
           )}
         </div>
 
-        {/* Bar Chart Section */}
-        {/* <div className="absolute left-0 bottom-0 w-full flex flex-col justify-center items-center bg-white shadow-md rounded-t-lg p-4">
-          <h3 className="text-lg font-bold text-gray-800 mb-2">Tile Usage by Zoom</h3>
-          <div className="w-full h-48">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={tileUsageData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="zoom" label={{ value: "Zoom Level", position: "insideBottom", offset: -5 }} />
-                <YAxis label={{ value: "Tiles Loaded", angle: -90, position: "insideLeft" }} />
-                <Tooltip />
-                <Bar dataKey="tiles" fill="#3b82f6" name="Tiles Loaded" />
-              </BarChart>
-            </ResponsiveContainer>
-
+        {/* Tile Usage Card */}
+        <div className="bg-white rounded-xl shadow-md p-5 mb-6">
+          <div className="flex items-center mb-4">
+            <h2 className="text-base font-bold text-gray-900">Tile Usage</h2>
           </div>
-        </div> */}
-        {clickedLocation && !routeEnabled && (
-          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-xl rounded-xl p-4 border border-gray-200 w-[90%] max-w-sm z-50 animate-slide-up">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="font-bold text-gray-800 mb-2 text-lg">Selected Location</h3>
-                <p className="text-sm text-gray-600 mb-2">{clickedLocation.display_name}</p>
-                {/* <div className="text-sm text-gray-500 space-y-1">
-                  <p>Latitude: <span className="font-medium">{parseFloat(clickedLocation.lat).toFixed(6)}</span></p>
-                  <p>Longitude: <span className="font-medium">{parseFloat(clickedLocation.lon).toFixed(6)}</span></p>
-                </div> */}
-              </div>
-              <button
-                onClick={() => setClickedLocation(null)}
-                className="text-gray-400 hover:text-gray-700 ml-2"
-                title="Close"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="flex gap-3 mt-4">
-              <button
-                onClick={() => {
-                  setDestCoords([parseFloat(clickedLocation.lat), parseFloat(clickedLocation.lon)]);
-                  setDestQuery(clickedLocation.display_name);
-                  setRouteEnabled(true);
-                }}
-                className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+          {/* Progress */}
+          <div className="mb-4">
+            <div className="flex justify-between text-gray-700 mb-1 text-sm">
+              <span>Today</span>
+              <span
+                className={`font-semibold ${tileUsage.todayRequests > tileUsage.limit
+                  ? "text-red-500"
+                  : "text-gray-900"
+                  }`}
               >
-                Directions
-              </button>
-              <button
-                onClick={() => {
-                  setSavedPlaces([...savedPlaces, clickedLocation]);
-                  localStorage.setItem("savedPlaces", JSON.stringify([...savedPlaces, clickedLocation]));
+                {tileUsage.todayRequests}/{tileUsage.limit.toLocaleString()}
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className={`h-2 rounded-full transition-all duration-500 ${tileUsage.todayRequests > tileUsage.limit
+                  ? "bg-red-500"
+                  : "bg-blue-500"
+                  }`}
+                style={{
+                  width: `${Math.min(
+                    (tileUsage.todayRequests / tileUsage.limit) * 100,
+                    100
+                  )}%`,
                 }}
-                className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
-              >
-                Save
-              </button>
+              ></div>
             </div>
           </div>
-        )}
 
+          {/* Stats */}
+          <div className="grid grid-cols-2 gap-4 text-center">
+            <div>
+              <p className="text-xl font-bold text-gray-900">
+                {tileUsage.totalRequests}
+              </p>
+              <p className="text-gray-500 text-xs">Total</p>
+            </div>
+            <div>
+              <p className="text-xl font-bold text-gray-900">
+                {tileUsage.lastHour}
+              </p>
+              <p className="text-gray-500 text-xs">Last Hour</p>
+            </div>
+          </div>
+
+          <div className="my-4">
+            <h3 className="text-sm font-semibold text-gray-700">
+              Zoom Level:{" "}
+              <span className="text-gray-900 font-bold">{zoomLevel}</span>
+            </h3>
+          </div>
+
+        </div>
       </div>
+
 
       {/* <div className="max-w-[calc(100% - 80px)] w-full h-screen"> */}
       {!routeEnabled && (
@@ -742,7 +908,13 @@ export default function MapComponent() {
               )}
             </div>
 
-
+            <button
+              onClick={handleDownloadReport}
+              className="max-sm:hidden flex items-center px-4 py-2 bg-[#6D8196] text-white rounded-lg hover:bg-[#46515A] text-sm font-medium transition-colors"
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Export Report
+            </button>
             {/* Help Button */}
             <button
               onClick={() => setShowHelp(true)}
@@ -750,6 +922,7 @@ export default function MapComponent() {
             >
               ?
             </button>
+
           </div>
 
           {/* Suggestions dropdown */}
@@ -757,7 +930,7 @@ export default function MapComponent() {
         </div>
       )}
       {routeEnabled && (
-        <div className="relative md:absolute left-0 md:left-28 md:right-0 my-2 md:mt-4 px-2 md:px-4 z-50 flex justify-between">
+        <div className="relative md:absolute left-0 md:left-28 md:right-0 my-2 md:mt-4 px-2 md:px-4 z-50 flex justify-between items-start">
           <div className="bg-white flex gap-4 rounded-xl mx-auto justify-center items-center p-4 shadow-md w-full max-w-lg border border-gray-200">
 
             {/* Icons column */}
@@ -844,6 +1017,13 @@ export default function MapComponent() {
             </button>
           </div>
           <button
+            onClick={handleDownloadReport}
+            className="max-sm:hidden flex items-center px-4 py-2 h-9 mr-5 bg-[#6D8196] text-white rounded-lg hover:bg-[#46515A] text-sm font-medium transition-colors"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export Report
+          </button>
+          <button
             onClick={() => setShowHelp(true)}
             className="p-2 h-10 w-10 max-sm:hidden flex justify-center items-center font-semibold bg-yellow-500 text-white rounded-full hover:bg-yellow-600 transition text-2xl"
           >
@@ -852,66 +1032,116 @@ export default function MapComponent() {
         </div>
       )}
       {route && routeEnabled && (
-        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 w-[90%] max-w-sm z-50">
-          <div className="backdrop-blur-lg bg-white/30 border border-white/40 rounded-2xl shadow-xl p-4 animate-fade-in hover:scale-105 transition-transform duration-300">
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 w-[80%] max-w-sm z-50">
+          <div className="backdrop-blur-lg bg-white border border-gray-200 rounded-2xl shadow-xl p-4 animate-fade-in hover:scale-105 transition-transform duration-300">
 
+            {/* Header */}
             <div className="flex justify-between items-center mb-3">
-              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <h3 className="text-lg font-semibold text-gray-900">
                 Route Info
               </h3>
               <button
                 onClick={() => setRoute(null)}
-                className="text-gray-700 hover:text-gray-900 transition text-xl font-bold"
+                className="text-gray-600 hover:text-red-600 transition text-lg font-bold"
               >
                 ✕
               </button>
             </div>
 
-            {/* Distance */}
-            <div className="flex flex-col mb-3">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-2xl bg-gradient-to-r from-green-400 to-blue-500 text-transparent bg-clip-text">📏</span>
-                <div>
-                  <p className="text-xs text-gray-700">Distance</p>
-                  <p className="font-semibold text-gray-900 text-sm">{route.distance.toFixed(2)} km</p>
-                </div>
-              </div>
-              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-1.5 bg-gradient-to-r from-green-400 to-blue-500"
-                  style={{ width: `${Math.min((route.distance / 50) * 100, 100)}%` }}
-                ></div>
-              </div>
-            </div>
+            {/* Info Section */}
+            <div className="grid grid-cols-2 gap-4">
 
-            {/* Duration */}
-            <div className="flex flex-col mb-3">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-2xl bg-gradient-to-r from-yellow-400 to-red-500 text-transparent bg-clip-text">⏱️</span>
-                <div>
-                  <p className="text-xs text-gray-700">Estimated Time</p>
-                  <p className="font-semibold text-gray-900 text-sm">{route.duration.toFixed(0)} min</p>
-                </div>
+              {/* Distance */}
+              <div className="flex flex-col">
+                <p className="text-xs text-gray-500">Distance</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {route.distance.toFixed(2)} km
+                </p>
               </div>
-              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className="h-1.5 bg-gradient-to-r from-yellow-400 to-red-500"
-                  style={{ width: `${Math.min((route.duration / 60) * 100, 100)}%` }}
-                ></div>
-              </div>
-            </div>
 
-            <div className="flex justify-between gap-2 mt-3">
-              <button className="flex-1 py-1.5 bg-white/40 backdrop-blur-md text-gray-900 font-semibold rounded-xl hover:bg-white/60 transition text-sm">
-                🚦 Start
-              </button>
-              <button className="flex-1 py-1.5 bg-white/40 backdrop-blur-md text-gray-900 font-semibold rounded-xl hover:bg-white/60 transition text-sm">
-                🏁 End
-              </button>
+              {/* Duration */}
+              <div className="flex flex-col">
+                <p className="text-xs text-gray-500">Estimated Time</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {route.duration.toFixed(0)} min
+                </p>
+              </div>
             </div>
           </div>
         </div>
       )}
+      {limitReached && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50">
+          <div className="bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg animate-bounce">
+            🚫 Daily tile request limit reached. No more tiles will load.
+          </div>
+        </div>
+      )}
+
+      <div className="absolute bottom-8 right-12 w-[85%] max-w-xs z-50">
+        <div className="bg-white/90 backdrop-blur-md rounded-xl shadow-md flex flex-row justify-between items-center gap-3 px-3 py-2 border border-gray-200">
+          {/* Zoom */}
+          <div className="text-center">
+            <h3 className="text-[10px] font-medium text-gray-500">Zoom</h3>
+            <p className="text-sm font-semibold text-gray-800">{zoomLevel}</p>
+          </div>
+
+          {/* Divider */}
+          <div className="w-px h-6 bg-gray-300"></div>
+
+          {/* Tiles */}
+          <div className="text-center">
+            <h3 className="text-[10px] font-medium text-gray-500">Tiles</h3>
+            <p className="text-sm font-semibold text-blue-600">{tileUsage.totalRequests}</p>
+          </div>
+        </div>
+      </div>
+
+      {clickedLocation && !routeEnabled && (
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-white shadow-xl rounded-xl p-4 border border-gray-200 w-[90%] max-w-sm z-50 animate-slide-up">
+          <div className="flex justify-between items-start">
+            <div>
+              <h3 className="font-bold text-gray-800 mb-2 text-lg">Selected Location</h3>
+              <p className="text-sm text-gray-600 mb-2">{clickedLocation.display_name}</p>
+              {/* <div className="text-sm text-gray-500 space-y-1">
+                  <p>Latitude: <span className="font-medium">{parseFloat(clickedLocation.lat).toFixed(6)}</span></p>
+                  <p>Longitude: <span className="font-medium">{parseFloat(clickedLocation.lon).toFixed(6)}</span></p>
+                </div> */}
+            </div>
+            <button
+              onClick={() => setClickedLocation(null)}
+              className="text-gray-400 hover:text-gray-700 ml-2"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={() => {
+                setDestCoords([parseFloat(clickedLocation.lat), parseFloat(clickedLocation.lon)]);
+                setDestQuery(clickedLocation.display_name);
+                setRouteEnabled(true);
+              }}
+              className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+            >
+              Directions
+            </button>
+            <button
+              onClick={() => {
+                setSavedPlaces([...savedPlaces, clickedLocation]);
+                localStorage.setItem("savedPlaces", JSON.stringify([...savedPlaces, clickedLocation]));
+              }}
+              className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
+
+
 
 
       {/* Map Section */}
@@ -921,55 +1151,54 @@ export default function MapComponent() {
         {/* Map */}
         <div className="w-full overflow-hidden shadow-lg border border-gray-200 h-[100%] relative">
 
-          <MapContainer center={coords} zoom={zoom} style={{ height: "100%", width: "100%" }} zoomControl={false} >
-
-            <TileLayer url={tileUrl} attribution={tileAttribution} />
+          <MapContainer
+            center={coords}
+            zoom={zoom}
+            scrollWheelZoom={true}
+            className="w-full h-full"
+            zoomControl={false}
+          >
             <ClickHandler setMarker={setMarker} setClickedLocation={setClickedLocation} />
-
-            <ZoomControl position="bottomright" />
             <ChangeMapView coords={coords} zoom={zoom} />
-            {/* <MapLogger />   */}
+            <ZoomControl position="bottomright" />
             <ScaleControl />
-
-
-            {/* Current location marker */}
-            {/* {userLocation && (
-              <Marker position={userLocation} icon={currentLocationIcon}>
-                <Popup>Your current location</Popup>
-              </Marker>
-            )} */}
-
-            {/* Single location marker */}
-            {/* {!routeEnabled && <Marker position={coords} icon={markerIcon} />} */}
-
-            {/* Route markers */}
-            {routeEnabled && startCoords && (
-              <Marker position={startCoords} icon={startIcon}>
-                <Popup>Start location</Popup>
-              </Marker>
-            )}
-
-            {routeEnabled && destCoords && (
-              <Marker position={destCoords} icon={endIcon}>
-                <Popup>Destination</Popup>
-              </Marker>
-            )}
-
-            {/* Route polyline */}
-            {routeEnabled && route && (
-              <Polyline positions={route.coordinates} color="blue" weight={4} opacity={0.7} />
-            )}
+            {memoizedMonitoredTileLayer}
             {marker && !routeEnabled && (
               <Marker position={marker} icon={markerIcon}>
                 <Popup>
-                  📍 Selected Location <br />
-                  {marker[0].toFixed(4)}, {marker[1].toFixed(4)}
+                  {clickedLocation ? (
+                    <div>
+                      <strong>{clickedLocation.display_name}</strong>
+                      <br />
+                      <span className="text-xs text-gray-500">Lat: {clickedLocation.lat}, Lon: {clickedLocation.lon}</span>
+                    </div>
+                  ) : (
+                    <span>Clicked Location</span>
+                  )}
                 </Popup>
               </Marker>
             )}
+            <ZoomWatcher setZoomLevel={setZoomLevel} />
 
+            {userLocation && (
+              <Marker position={userLocation} icon={currentLocationIcon}>
+                <Popup>Current Location</Popup>
+              </Marker>
+            )}
+            {startCoords && (
+              <Marker position={startCoords} icon={startIcon}>
+                <Popup>Start: {startQuery}</Popup>
+              </Marker>
+            )}
+            {destCoords && (
+              <Marker position={destCoords} icon={endIcon}>
+                <Popup>Destination: {destQuery}</Popup>
+              </Marker>
+            )}
+            {route && (
+              <Polyline pathOptions={{ color: 'blue', weight: 6, opacity: 0.7 }} positions={route.coordinates} />
+            )}
           </MapContainer>
-
           {/* Route loading indicator */}
           {routeLoading && (
             <div className="absolute top-4 right-4 bg-white p-3 rounded-lg shadow-md flex items-center gap-2">
@@ -1002,6 +1231,6 @@ export default function MapComponent() {
 
         </div>
       </div>
-    </div>
+    </div >
   );
 }

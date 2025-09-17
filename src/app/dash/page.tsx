@@ -1,20 +1,49 @@
 'use client'
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MapPin, Activity, BarChart3, Settings, Download, AlertCircle, Layers, ZoomIn, ZoomOut } from 'lucide-react';
+import { Map, TileLayer } from 'leaflet';
+
+
+type TileRequest = {
+    timestamp: number;
+    tiles: number;
+    zoom: number;
+    layer: string;
+    position: [number, number]; // strict tuple
+    action: string;
+};
+
+type TileUsage = {
+    totalRequests: number;
+    todayRequests: number;
+    lastHour: number;
+    currentSession: number;
+    requestsToday: TileRequest[];
+    limit: number;              // ✅ must be included
+};
 
 const OpenStreetMapApp = () => {
     const mapRef = useRef(null);
-    const mapInstanceRef = useRef(null);
     const leafletLoadedRef = useRef(false);
-
-    const [tileUsage, setTileUsage] = useState({
+    const initialTileUsage: TileUsage = {
         totalRequests: 0,
         todayRequests: 0,
         lastHour: 0,
-        limit: 10000,
-        requestsToday: [],
-        currentSession: 0
-    });
+        currentSession: 0,
+        requestsToday: [], // ✅ now typed as TileRequest[]
+        limit: 100,
+    };
+    const [tileUsage, setTileUsage] = useState<TileUsage>(initialTileUsage);
+
+
+    // const [tileUsage, setTileUsage] = useState({
+    //     totalRequests: 0,
+    //     todayRequests: 0,
+    //     lastHour: 0,
+    //     limit: 10000,
+    //     requestsToday: [],
+    //     currentSession: 0
+    // });
 
     const [isMonitoring, setIsMonitoring] = useState(true);
     const [mapControls, setMapControls] = useState({
@@ -24,10 +53,15 @@ const OpenStreetMapApp = () => {
         attribution: true
     });
 
-    const [currentPosition, setCurrentPosition] = useState([28.6139, 77.2090]); // Delhi coordinates
+    const [currentPosition, setCurrentPosition] = useState<[number, number]>([28.6139, 77.2090]); // example: Delhi
     const [zoomLevel, setZoomLevel] = useState(10);
-    const [activeLayer, setActiveLayer] = useState('osm');
+    const [activeLayer, setActiveLayer] = useState<LayerKey>('osm');
     const [mapReady, setMapReady] = useState(false);
+
+    const tileLayerRef = useRef<TileLayer | null>(null);
+    const mapInstanceRef = useRef<Map | null>(null);
+
+    type LayerKey = keyof typeof tileLayers;
 
     // Available tile layers
     const tileLayers = {
@@ -57,14 +91,14 @@ const OpenStreetMapApp = () => {
     const trackTileRequest = useCallback((tiles = 1, action = 'unknown') => {
         if (!isMonitoring) return;
 
-        setTileUsage(prev => {
-            const newRequest = {
+        setTileUsage((prev: TileUsage) => {
+            const newRequest: TileRequest = {
                 timestamp: Date.now(),
                 tiles: tiles,
                 zoom: zoomLevel,
                 layer: activeLayer,
-                position: [...currentPosition],
-                action: action
+                position: [currentPosition[0], currentPosition[1]], // ✅ tuple enforced
+                action: action,
             };
 
             return {
@@ -73,7 +107,7 @@ const OpenStreetMapApp = () => {
                 todayRequests: prev.todayRequests + tiles,
                 lastHour: prev.lastHour + tiles,
                 currentSession: prev.currentSession + tiles,
-                requestsToday: [...prev.requestsToday.slice(-99), newRequest]
+                requestsToday: [...prev.requestsToday.slice(-99), newRequest],
             };
         });
     }, [isMonitoring, zoomLevel, activeLayer, currentPosition]);
@@ -102,74 +136,79 @@ const OpenStreetMapApp = () => {
             if (script.parentNode) script.parentNode.removeChild(script);
         };
     }, []);
-
     const initializeMap = () => {
         if (!window.L || !mapRef.current || mapInstanceRef.current) return;
 
         try {
             // Create map instance
             const map = window.L.map(mapRef.current, {
-                center: currentPosition,
+                center: currentPosition as [number, number],
                 zoom: zoomLevel,
                 zoomControl: mapControls.zoom,
-                attributionControl: mapControls.attribution
+                attributionControl: mapControls.attribution,
             });
 
             // Add initial tile layer
-            const initialLayer = window.L.tileLayer(tileLayers[activeLayer].url, {
-                attribution: tileLayers[activeLayer].attribution,
+            const initialLayer = window.L.tileLayer((tileLayers)[activeLayer].url, {
+                attribution: (tileLayers)[activeLayer].attribution,
                 maxZoom: 18,
-            });
-            initialLayer.addTo(map);
+            }).addTo(map);
 
-            // Store layer reference
-            map.currentTileLayer = initialLayer;
+            // Keep a ref to the tile layer if needed
+            tileLayerRef.current = initialLayer;
 
             // Add marker
             const marker = window.L.marker(currentPosition).addTo(map);
-            marker.bindPopup(`<b>Current Location</b><br>Lat: ${currentPosition[0]}<br>Lng: ${currentPosition[1]}`);
+            marker.bindPopup(
+                `<b>Current Location</b><br>Lat: ${currentPosition[0]}<br>Lng: ${currentPosition[1]}`
+            );
 
-            // Event listeners with tile usage tracking
-            map.on('zoomend', () => {
+            // Zoom event
+            map.on("zoomend", () => {
                 const newZoom = map.getZoom();
                 setZoomLevel(newZoom);
-                const tilesEstimate = Math.pow(4, Math.abs(newZoom - zoomLevel));
-                trackTileRequest(tilesEstimate, 'zoom');
+                const tilesEstimate = Math.pow(4, Math.max(0, newZoom - 6));
+                trackTileRequest(tilesEstimate, "zoom");
             });
 
-            map.on('moveend', () => {
+            // Pan event
+            map.on("moveend", () => {
                 const center = map.getCenter();
                 setCurrentPosition([center.lat, center.lng]);
-                trackTileRequest(8, 'pan');
 
-                // Update marker popup
                 marker.setLatLng([center.lat, center.lng]);
-                marker.setPopupContent(`<b>Current Location</b><br>Lat: ${center.lat.toFixed(4)}<br>Lng: ${center.lng.toFixed(4)}`);
+                marker.setPopupContent(
+                    `<b>Current Location</b><br>Lat: ${center.lat.toFixed(
+                        4
+                    )}<br>Lng: ${center.lng.toFixed(4)}`
+                );
+
+                trackTileRequest(8, "pan");
             });
 
-            map.on('baselayerchange', (e) => {
-                trackTileRequest(Math.pow(4, zoomLevel - 6), 'layer-change');
+            // Layer change event (only if control is added)
+            map.on("baselayerchange", () => {
+                trackTileRequest(Math.pow(4, Math.max(0, zoomLevel - 6)), "layer-change");
             });
 
-            // Track initial load
-            map.on('load', () => {
-                trackTileRequest(Math.pow(4, zoomLevel - 6), 'initial-load');
+            // Trigger after initial load
+            map.whenReady(() => {
+                trackTileRequest(Math.pow(4, Math.max(0, zoomLevel - 6)), "initial-load");
             });
 
+            // Save map instance
             mapInstanceRef.current = map;
             setMapReady(true);
 
-            // Initial tile request tracking
-            trackTileRequest(Math.pow(4, Math.max(0, zoomLevel - 8)), 'initialization');
-
         } catch (error) {
-            console.error('Error initializing map:', error);
+            console.error("Error initializing map:", error);
             setMapReady(false);
         }
     };
 
+
     // Handle zoom changes
-    const handleZoomChange = (delta) => {
+    const handleZoomChange = (delta: number) => {
         if (mapInstanceRef.current) {
             const newZoom = Math.max(1, Math.min(18, zoomLevel + delta));
             mapInstanceRef.current.setZoom(newZoom);
@@ -177,13 +216,13 @@ const OpenStreetMapApp = () => {
     };
 
     // Handle layer changes
-    const handleLayerChange = (layerKey) => {
+    const handleLayerChange = (layerKey: LayerKey) => {
         if (mapInstanceRef.current && window.L) {
             const map = mapInstanceRef.current;
 
             // Remove current layer
-            if (map.currentTileLayer) {
-                map.removeLayer(map.currentTileLayer);
+            if (tileLayerRef.current) {
+                map.removeLayer(tileLayerRef.current);
             }
 
             // Add new layer
@@ -192,15 +231,19 @@ const OpenStreetMapApp = () => {
                 maxZoom: 18,
             });
             newLayer.addTo(map);
-            map.currentTileLayer = newLayer;
+            tileLayerRef.current = newLayer; // ✅ keep track of active layer
 
             setActiveLayer(layerKey);
-            trackTileRequest(Math.pow(4, Math.max(0, zoomLevel - 6)), 'layer-switch');
+
+            // track tile usage (example formula kept from your code)
+            trackTileRequest(Math.pow(4, Math.max(0, zoomLevel - 6)), "layer-switch");
         }
     };
+    type ControlKey = "zoom" | "attribution"; // add 'layers' | 'fullscreen' if needed
+
 
     // Toggle map controls
-    const toggleControl = (control) => {
+    const toggleControl = (control: ControlKey) => {
         setMapControls(prev => {
             const newControls = { ...prev, [control]: !prev[control] };
 
@@ -221,20 +264,20 @@ const OpenStreetMapApp = () => {
                             map.removeControl(map.attributionControl);
                         }
                         break;
-                // case 'layers':
-                //     if (newControls.layers) {
-                //         map.layersControl.addTo(map);
-                //     } else {
-                //         map.removeControl(map.layersControl);
-                //     }
-                //     break;
-                // case 'fullscreen':
-                //     if (newControls.fullscreen) {
-                //         map.fullscreenControl.addTo(map);
-                //     } else {
-                //         map.removeControl(map.fullscreenControl);
-                //     }
-                //     break;
+                    // case 'layers':
+                    //     if (newControls.layers) {
+                    //         map.layersControl.addTo(map);
+                    //     } else {
+                    //         map.removeControl(map.layersControl);
+                    //     }
+                    //     break;
+                    // case 'fullscreen':
+                    //     if (newControls.fullscreen) {
+                    //         map.fullscreenControl.addTo(map);
+                    //     } else {
+                    //         map.removeControl(map.fullscreenControl);
+                    //     }
+                    //     break;
                 }
             }
 
@@ -247,15 +290,15 @@ const OpenStreetMapApp = () => {
         if (navigator.geolocation && mapInstanceRef.current) {
             navigator.geolocation.getCurrentPosition((position) => {
                 const { latitude, longitude } = position.coords;
-                const newPos = [latitude, longitude];
-                mapInstanceRef.current.setView(newPos, zoomLevel);
+                const newPos: [number, number] = [latitude, longitude]; // ✅ tuple
+                mapInstanceRef.current!.setView(newPos, zoomLevel);
                 setCurrentPosition(newPos);
                 trackTileRequest(4, 'geolocation');
             }, (error) => {
                 console.error('Geolocation error:', error);
                 // Fallback to a major city
-                const fallbackPos = [40.7128, -74.0060]; // New York
-                mapInstanceRef.current.setView(fallbackPos, zoomLevel);
+                const fallbackPos: [number, number] = [40.7128, -74.0060]; // New York
+                mapInstanceRef.current!.setView(fallbackPos, zoomLevel);
                 setCurrentPosition(fallbackPos);
             });
         }
@@ -282,13 +325,14 @@ Total Tile Requests: ${report.totalTileRequests.toLocaleString()}
 Session Requests: ${report.sessionRequests.toLocaleString()}
 Average Per Hour: ${report.averagePerHour.toLocaleString()}
 Current Zoom Level: ${report.mostUsedZoom}
-Active Layer: ${tileLayers[report.mostUsedLayer].name}
+Active Layer: ${tileLayers[report.mostUsedLayer as LayerKey].name}
 Efficiency: ${report.efficiency}%
 Usage Limit: ${tileUsage.limit.toLocaleString()}
 
 === RECENT ACTIVITY ===
 ${report.recentRequests.map(req =>
-            `${new Date(req.timestamp).toLocaleTimeString()} | ${req.tiles.toString().padStart(3)} tiles | ${req.action.padEnd(15)} | ${tileLayers[req.layer].name} | Zoom ${req.zoom}`
+            // `${new Date(req.timestamp).toLocaleTimeString()} | ${req.tiles.toString().padStart(3)} tiles | ${req.action.padEnd(15)} | Zoom ${req.zoom}`
+            `${new Date(req.timestamp).toLocaleTimeString()} | ${req.tiles.toString().padStart(3)} tiles | ${req.action.padEnd(15)} | ${tileLayers[req.layer as LayerKey].name} | Zoom ${req.zoom}`
         ).join('\n')}
 
 === CURRENT STATUS ===
@@ -331,8 +375,8 @@ Generated: ${new Date().toLocaleString()}`;
                             <button
                                 onClick={() => setIsMonitoring(!isMonitoring)}
                                 className={`flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isMonitoring
-                                        ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                    ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                                     }`}
                             >
                                 <Activity className="h-4 w-4 mr-2" />
@@ -358,13 +402,13 @@ Generated: ${new Date().toLocaleString()}`;
                         <div className="flex items-center  gap-2 mb-4">
                             <BarChart3 className="h-5 w-5 text-gray-400" />
                             <h3 className="text-lg font-semibold text-gray-900">Tile Usage</h3>
-                           
+
                         </div>
 
                         <div className="space-y-4">
                             <div>
                                 <div className="flex justify-between text-sm mb-1">
-                                    <span className='text-gray-900'>Today's Usage</span>
+                                    <span className='text-gray-900'>Today&aposs Usage</span>
                                     <span className={isNearLimit ? 'text-red-600 font-medium' : 'text-gray-600'}>
                                         {tileUsage.todayRequests.toLocaleString()}/{tileUsage.limit.toLocaleString()}
                                     </span>
@@ -413,7 +457,7 @@ Generated: ${new Date().toLocaleString()}`;
                                 <label className="text-sm font-medium text-gray-700 block mb-2">Layer Selection</label>
                                 <select
                                     value={activeLayer}
-                                    onChange={(e) => handleLayerChange(e.target.value)}
+                                    onChange={(e) => handleLayerChange(e.target.value as LayerKey)}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm text-gray-900"
                                 >
                                     {Object.entries(tileLayers).map(([key, layer]) => (
@@ -460,7 +504,7 @@ Generated: ${new Date().toLocaleString()}`;
                                         <input
                                             type="checkbox"
                                             checked={enabled}
-                                            onChange={() => toggleControl(control)}
+                                            onChange={() => toggleControl(control as ControlKey)}
                                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                         />
                                         <span className="ml-2 text-sm text-gray-700 capitalize">{control.replace('_', ' ')}</span>
